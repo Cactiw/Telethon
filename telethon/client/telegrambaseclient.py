@@ -258,6 +258,9 @@ class TelegramBaseClient(abc.ABC):
                 "Your API ID or Hash cannot be empty or None. "
                 "Refer to telethon.rtfd.io for more information.")
 
+        if lang_pack is None:
+            lang_pack = ''
+
         self._use_ipv6 = use_ipv6
 
         if isinstance(base_logger, str):
