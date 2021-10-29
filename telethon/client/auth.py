@@ -484,7 +484,8 @@ class AuthMethods:
             self: 'TelegramClient',
             phone: str,
             *,
-            force_sms: bool = False) -> 'types.auth.SentCode':
+            force_sms: bool = False,
+            code_settings: types.CodeSettings = None) -> 'types.auth.SentCode':
         """
         Sends the Telegram code needed to login to the given phone number.
 
@@ -494,6 +495,9 @@ class AuthMethods:
 
             force_sms (`bool`, optional):
                 Whether to force sending as SMS.
+
+            code_settings (`types.CodeSettings`, optional):
+                Code settings for flash calls request and other settings.
 
         Returns
             An instance of :tl:`SentCode`.
@@ -505,6 +509,9 @@ class AuthMethods:
                 sent = await client.send_code_request(phone)
                 print(sent)
         """
+        if code_settings is None:
+            code_settings = types.CodeSettings()
+
         result = None
         phone = utils.parse_phone(phone) or self._phone
         phone_hash = self._phone_code_hash.get(phone)
@@ -512,9 +519,9 @@ class AuthMethods:
         if not phone_hash:
             try:
                 result = await self(functions.auth.SendCodeRequest(
-                    phone, self.api_id, self.api_hash, types.CodeSettings()))
+                    phone, self.api_id, self.api_hash, code_settings))
             except errors.AuthRestartError:
-                return await self.send_code_request(phone, force_sms=force_sms)
+                return await self.send_code_request(phone, force_sms=force_sms, code_settings=code_settings)
 
             # If we already sent a SMS, do not resend the code (hash may be empty)
             if isinstance(result.type, types.auth.SentCodeTypeSms):
