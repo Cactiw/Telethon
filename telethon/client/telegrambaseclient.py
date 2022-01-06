@@ -200,6 +200,15 @@ class TelegramBaseClient(abc.ABC):
             If a `str` is given, it'll be passed to `logging.getLogger()`. If a
             `logging.Logger` is given, it'll be used directly. If something
             else or nothing is given, the default logger will be used.
+
+        receive_updates (`bool`, optional):
+            Whether the client will receive updates or not. By default, updates
+            will be received from Telegram as they occur.
+
+            Turning this off means that Telegram will not send updates at all
+            so event handlers, conversations, and QR login will not work.
+            However, certain scripts don't need updates, so this will reduce
+            the amount of bandwidth used.
     """
 
     # Current TelegramClient version
@@ -422,6 +431,7 @@ class TelegramBaseClient(abc.ABC):
         self._updates_handle = None
         self._last_request = time.time()
         self._channel_pts = {}
+        self._no_updates = not receive_updates
 
         if sequential_updates:
             self._updates_queue = asyncio.Queue()
@@ -870,6 +880,11 @@ class TelegramBaseClient(abc.ABC):
                 Whether the requests (if more than one was given) should be
                 executed sequentially on the server. They run in arbitrary
                 order by default.
+
+            flood_sleep_threshold (`int` | `None`, optional):
+                The flood sleep threshold to use for this request. This overrides
+                the default value stored in
+                `client.flood_sleep_threshold <telethon.client.telegrambaseclient.TelegramBaseClient.flood_sleep_threshold>`
 
         Returns:
             The result of the request (often a `TLObject`) or a list of
