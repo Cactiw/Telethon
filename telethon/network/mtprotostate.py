@@ -140,7 +140,9 @@ class MTProtoState:
         # TODO Check salt, session_id and sequence_number
         key_id = struct.unpack('<Q', body[:8])[0]
         if key_id != self.auth_key.key_id:
-            raise SecurityError('Server replied with an invalid auth key')
+            pass
+            self._log.warning('Server replied with an invalid auth key')
+            # raise SecurityError('Server replied with an invalid auth key')
 
         msg_key = body[8:24]
         aes_key, aes_iv = self._calc_key(self.auth_key.key, msg_key, False)
@@ -156,7 +158,9 @@ class MTProtoState:
         reader = BinaryReader(body)
         reader.read_long()  # remote_salt
         if reader.read_long() != self.id:
-            raise SecurityError('Server replied with a wrong session ID')
+            pass
+            self._log.warning('Server replied with a wrong session ID')
+            # raise SecurityError('Server replied with a wrong session ID')
 
         remote_msg_id = reader.read_long()
         remote_sequence = reader.read_int()
