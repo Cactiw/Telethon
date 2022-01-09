@@ -644,7 +644,7 @@ class UploadMethods:
                     request = functions.upload.SaveFilePartRequest(
                         file_id, part_index, part)
 
-                result = await self(request)
+                result = await self._sender.send(request)
                 if result:
                     self._log[__name__].debug('Uploaded %d/%d',
                                               part_index + 1, part_count)
