@@ -251,7 +251,8 @@ class TelegramBaseClient(abc.ABC):
             installer: str = None,
             package_id: str = None,
             device_token: str = None,
-            hide_proxy: bool = False
+            hide_proxy: bool = False,
+            allowed_updates_chats: list = None
     ):
         if not api_id or not api_hash:
             raise ValueError(
@@ -432,6 +433,10 @@ class TelegramBaseClient(abc.ABC):
         self._last_request = time.time()
         self._channel_pts = {}
         self._no_updates = not receive_updates
+
+        if allowed_updates_chats is None:
+            allowed_updates_chats = []
+        self._allowed_chats = allowed_updates_chats
 
         if sequential_updates:
             self._updates_queue = asyncio.Queue()
