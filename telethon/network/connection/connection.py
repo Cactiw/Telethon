@@ -196,13 +196,16 @@ class Connection(abc.ABC):
 
             sock.setblocking(False)
 
-        after_idle_sec = 1
-        interval_sec = 3
-        max_fails = 5
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, after_idle_sec)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval_sec)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, max_fails)
+        try:
+            after_idle_sec = 1
+            interval_sec = 3
+            max_fails = 5
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, after_idle_sec)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval_sec)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, max_fails)
+        except Exception as e:
+            self._log.info(f"System does not support socket TCP_KEEP*: {str(e)}")
 
         return sock
 
