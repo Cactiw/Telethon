@@ -16,10 +16,11 @@ from ..sessions import Session, SQLiteSession, MemorySession
 from ..statecache import StateCache
 from ..tl import functions, types
 from ..tl.alltlobjects import LAYER
-from ..tl.types import JsonObject, JsonNumber, JsonObjectValue, JsonString
+from ..tl.functions.langpack import GetLanguagesRequest, GetLangPackRequest
+from ..tl.types import JsonObjectValue, JsonString, JsonNumber, JsonArray, JsonObject
 
 DEFAULT_DC_ID = 2
-DEFAULT_IPV4_IP = '149.154.167.51'
+DEFAULT_IPV4_IP = '149.154.167.50'
 DEFAULT_IPV6_IP = '2001:67c:4e8:f002::a'
 DEFAULT_PORT = 443
 
@@ -251,7 +252,8 @@ class TelegramBaseClient(abc.ABC):
             installer: str = None,
             package_id: str = None,
             device_token: str = None,
-            hide_proxy: bool = False
+            hide_proxy: bool = False,
+            allowed_updates_chats: list = None
     ):
         if not api_id or not api_hash:
             raise ValueError(
@@ -319,6 +321,8 @@ class TelegramBaseClient(abc.ABC):
         self._entity_cache = EntityCache()
         self.api_id = int(api_id)
         self.api_hash = api_hash
+        self.lang_code = lang_code
+        self.lang_pack = lang_pack
 
         # Current proxy implementation requires `sock_connect`, and some
         # event loops lack this method. If the current loop is missing it,
@@ -432,6 +436,10 @@ class TelegramBaseClient(abc.ABC):
         self._last_request = time.time()
         self._channel_pts = {}
         self._no_updates = not receive_updates
+
+        if allowed_updates_chats is None:
+            allowed_updates_chats = []
+        self._allowed_chats = allowed_updates_chats
 
         if sequential_updates:
             self._updates_queue = asyncio.Queue()
@@ -573,6 +581,10 @@ class TelegramBaseClient(abc.ABC):
         await self._sender.send(functions.InvokeWithLayerRequest(
             LAYER, self._init_request
         ))
+        # result = await self._sender.send(GetLanguagesRequest(self.lang_pack))
+        # print(result)
+        # result = await self._sender.send(GetLangPackRequest(self.lang_pack, self.lang_code))
+        # print(result)
 
         self._updates_handle = self.loop.create_task(self._update_loop())
 
