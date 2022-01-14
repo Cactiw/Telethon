@@ -378,7 +378,7 @@ class MTProtoSender:
                 # TODO there should probably only be one place to except all these errors
                 if isinstance(e, InvalidBufferError) and e.code == 404:
                     self._log.info('Broken authorization key; resetting')
-                    self.auth_key.key = None
+                    # self.auth_key.key = None # Never delete it
                     if self._auth_key_callback:
                         self._auth_key_callback(None)
 
