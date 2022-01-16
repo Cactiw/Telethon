@@ -535,9 +535,9 @@ class UpdateMethods:
         self._log[__name__].debug('Getting difference for entities '
                                   'for %r', update.__class__)
         if self._no_updates and channel_id not in self._allowed_chats:
-            logging.info(f"Avoided get difference request {channel_id}")
+            # logging.info(f"Avoided get difference request {channel_id}")
             return
-        logging.info(f"Still making difference request for {channel_id}")
+        # logging.info(f"Still making difference request for {channel_id}")
         if channel_id:
             # There are reports where we somehow call get channel difference
             # with `InputPeerEmpty`. Check our assumptions to better debug
