@@ -221,6 +221,11 @@ class _ParticipantsIter(RequestIter):
                 ))).count
 
         results = await self.client(self.requests)
+        try:  # Bad fix for TypeError: 'ChannelParticipants' object is not subscriptable
+            req_len = len(self.requests)
+        except TypeError:
+            self.requests = [self.requests]
+
         for i in reversed(range(len(self.requests))):
             if isinstance(results, ChannelParticipants):
                 participants = results
