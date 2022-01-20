@@ -7,6 +7,7 @@ import typing
 from .. import helpers, utils, hints, errors
 from ..requestiter import RequestIter
 from ..tl import types, functions, custom
+from ..tl.types.channels import ChannelParticipants
 
 if typing.TYPE_CHECKING:
     from .telegramclient import TelegramClient
@@ -220,8 +221,16 @@ class _ParticipantsIter(RequestIter):
                 ))).count
 
         results = await self.client(self.requests)
+        try:  # Bad fix for TypeError: 'ChannelParticipants' object is not subscriptable
+            req_len = len(self.requests)
+        except TypeError:
+            self.requests = [self.requests]
+
         for i in reversed(range(len(self.requests))):
-            participants = results[i]
+            if isinstance(results, ChannelParticipants):
+                participants = results
+            else:
+                participants = results[i]
             if self.total is None:
                 # Will only get here if there was one request with a filter that matched all users.
                 self.total = participants.count
