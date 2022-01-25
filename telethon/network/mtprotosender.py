@@ -273,11 +273,16 @@ class MTProtoSender:
 
     async def _try_connect(self, attempt):
         try:
+            import python_socks._errors as python_socks_errors
+            errors = (python_socks_errors.ProxyError, python_socks_errors.ProxyTimeoutError, python_socks_errors.ProxyConnectionError)
+        except ImportError:
+            errors = ()
+        try:
             self._log.debug('Connection attempt %d...', attempt)
             await self._connection.connect(timeout=self._connect_timeout)
             self._log.debug('Connection success!')
             return True
-        except (IOError, asyncio.TimeoutError) as e:
+        except (IOError, asyncio.TimeoutError, *errors) as e:
             self._log.warning('Attempt %d at connecting failed: %s: %s',
                               attempt, type(e).__name__, e)
             await asyncio.sleep(self._delay)
