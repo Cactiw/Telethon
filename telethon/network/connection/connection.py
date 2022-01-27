@@ -118,9 +118,9 @@ class Connection(abc.ABC):
             # in exceptions clauses everywhere through the code, we
             # rather monkey-patch them in place.
 
-            python_socks._errors.ProxyError = ConnectionError
-            python_socks._errors.ProxyConnectionError = ConnectionError
-            python_socks._errors.ProxyTimeoutError = ConnectionError
+            # python_socks._errors.ProxyError = ConnectionError
+            # python_socks._errors.ProxyConnectionError = ConnectionError
+            # python_socks._errors.ProxyTimeoutError = ConnectionError
 
             from python_socks.async_.asyncio import Proxy
 
