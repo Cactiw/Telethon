@@ -42,7 +42,7 @@ class TLObject:
         """Write bytes by using Telegram guidelines"""
         if not isinstance(data, bytes):
             if isinstance(data, str):
-                data = data.encode('utf-8')
+                data = data.encode('utf-8', 'ignore')
             else:
                 raise TypeError(
                     'bytes or str expected, not {}'.format(type(data)))
