@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import itertools
+import random
 import string
 import typing
 
@@ -202,6 +203,8 @@ class _ParticipantsIter(RequestIter):
 
         if self.requests[0].offset > self.limit:
             return True
+
+        await asyncio.sleep(random.random() + 0.5)
 
         if self.total is None:
             f = self.requests[0].filter
