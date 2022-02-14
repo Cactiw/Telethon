@@ -204,7 +204,7 @@ class _ParticipantsIter(RequestIter):
         if self.requests[0].offset > self.limit:
             return True
 
-        await asyncio.sleep(random.random() + 0.5)
+        await asyncio.sleep(random.random())
 
         if self.total is None:
             f = self.requests[0].filter
