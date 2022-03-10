@@ -394,7 +394,7 @@ class MTProtoSender:
 
             except Exception as e:
                 last_error = e
-                self._log.exception('Unexpected exception reconnecting on '
+                self._log.info('Unexpected exception reconnecting on '
                                     'attempt %d', attempt)
 
                 await asyncio.sleep(self._delay)
