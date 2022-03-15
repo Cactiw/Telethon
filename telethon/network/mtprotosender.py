@@ -523,7 +523,7 @@ class MTProtoSender:
                 # should not be considered safe and it should be ignored.
                 self._log.warning('Security error while unpacking a '
                                   'received message: %s', e)
-                continue
+                # continue  # Anyway process message
             except BufferError as e:
                 if isinstance(e, InvalidBufferError) and e.code == 404:
                     self._log.info('Broken authorization key; resetting')
@@ -543,8 +543,9 @@ class MTProtoSender:
 
             try:
                 await self._process_message(message)
-            except Exception:
-                self._log.exception('Unhandled error while processing msgs')
+            except Exception as e:
+                self._start_reconnect(e)
+                self._log.warning('Unhandled error while processing msgs. Reconnecting.')
 
     # Response Handlers
 
