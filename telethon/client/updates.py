@@ -534,7 +534,7 @@ class UpdateMethods:
         # in order to fetch this update at full, including its entities.
         self._log[__name__].debug('Getting difference for entities '
                                   'for %r', update.__class__)
-        if self._no_updates and channel_id not in self._allowed_chats:
+        if channel_id not in self._allowed_chats:
             # logging.info(f"Avoided get difference request {channel_id}")
             return
         # logging.info(f"Still making difference request for {channel_id}")
