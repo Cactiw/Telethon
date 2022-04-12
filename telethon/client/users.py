@@ -120,7 +120,7 @@ class UserMethods:
                 self._log[__name__].info('Phone migrated to %d', e.new_dc)
                 should_raise = isinstance(e, (
                     errors.PhoneMigrateError, errors.NetworkMigrateError
-                ))
+                )) or self._raise_migrated_error
                 if should_raise and await self.is_user_authorized():
                     raise
                 await self._switch_dc(e.new_dc)
