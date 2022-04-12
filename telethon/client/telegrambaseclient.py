@@ -253,7 +253,8 @@ class TelegramBaseClient(abc.ABC):
             package_id: str = None,
             device_token: str = None,
             hide_proxy: bool = False,
-            allowed_updates_chats: list = None
+            allowed_updates_chats: list = None,
+            raise_migrated_error: bool = False
     ):
         if not api_id or not api_hash:
             raise ValueError(
@@ -323,6 +324,7 @@ class TelegramBaseClient(abc.ABC):
         self.api_hash = api_hash
         self.lang_code = lang_code
         self.lang_pack = lang_pack
+        self._raise_migrated_error = raise_migrated_error
 
         # Current proxy implementation requires `sock_connect`, and some
         # event loops lack this method. If the current loop is missing it,
