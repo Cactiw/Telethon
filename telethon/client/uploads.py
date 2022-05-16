@@ -753,6 +753,9 @@ class UploadMethods:
                     thumb = str(thumb.absolute())
                 thumb = await self.upload_file(thumb, file_size=file_size)
 
+            if voice_note and mime_type == "application/octet-stream":
+                mime_type = "audio/ogg"
+
             media = types.InputMediaUploadedDocument(
                 file=file_handle,
                 mime_type=mime_type,
