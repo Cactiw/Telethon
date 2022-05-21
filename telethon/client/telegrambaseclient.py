@@ -402,6 +402,9 @@ class TelegramBaseClient(abc.ABC):
 
             params = JsonObject(values)
 
+        if not system_lang_code:
+            system_lang_code = 'en'
+
         self._init_request = functions.InitConnectionRequest(
             api_id=self.api_id,
             device_model=device_model or default_device_model or 'Unknown',
