@@ -6,6 +6,7 @@ import logging
 import platform
 import time
 import typing
+import datetime
 
 from .. import version, helpers, __name__ as __base_name__
 from ..crypto import rsa
@@ -13,11 +14,11 @@ from ..entitycache import EntityCache
 from ..extensions import markdown
 from ..network import MTProtoSender, Connection, ConnectionTcpFull, TcpMTProxy
 from ..sessions import Session, SQLiteSession, MemorySession
-from ..statecache import StateCache
 from ..tl import functions, types
 from ..tl.alltlobjects import LAYER
 from ..tl.functions.langpack import GetLanguagesRequest, GetLangPackRequest
 from ..tl.types import JsonObjectValue, JsonString, JsonNumber, JsonArray, JsonObject
+from .._updates import MessageBox, EntityCache as MbEntityCache, SessionState, ChannelState, Entity, EntityType
 
 DEFAULT_DC_ID = 2
 DEFAULT_IPV4_IP = '149.154.167.50'
@@ -254,7 +255,8 @@ class TelegramBaseClient(abc.ABC):
             device_token: str = None,
             hide_proxy: bool = False,
             allowed_updates_chats: list = None,
-            raise_migrated_error: bool = False
+            raise_migrated_error: bool = False,
+            catch_up: bool = False
     ):
         if not api_id or not api_hash:
             raise ValueError(
@@ -418,18 +420,6 @@ class TelegramBaseClient(abc.ABC):
             params=params
         )
 
-        self._sender = MTProtoSender(
-            self.session.auth_key,
-            loggers=self._log,
-            retries=self._connection_retries,
-            delay=self._retry_delay,
-            auto_reconnect=self._auto_reconnect,
-            connect_timeout=self._timeout,
-            auth_key_callback=self._auth_key_callback,
-            update_callback=self._handle_update,
-            auto_reconnect_callback=self._handle_auto_reconnect
-        )
-
         # Remember flood-waited requests to avoid making them again
         self._flood_waited_requests = {}
 
@@ -438,6 +428,7 @@ class TelegramBaseClient(abc.ABC):
         self._borrow_sender_lock = asyncio.Lock()
 
         self._updates_handle = None
+        self._keepalive_handle = None
         self._last_request = time.time()
         self._channel_pts = {}
         self._no_updates = not receive_updates
@@ -446,21 +437,11 @@ class TelegramBaseClient(abc.ABC):
             allowed_updates_chats = []
         self._allowed_chats = allowed_updates_chats
 
-        if sequential_updates:
-            self._updates_queue = asyncio.Queue()
-            self._dispatching_updates_queue = asyncio.Event()
-        else:
-            # Use a set of pending instead of a queue so we can properly
-            # terminate all pending updates on disconnect.
-            self._updates_queue = set()
-            self._dispatching_updates_queue = None
+        # Used for non-sequential updates, in order to terminate all pending tasks on disconnect.
+        self._sequential_updates = sequential_updates
+        self._event_handler_tasks = set()
 
         self._authorized = None  # None = unknown, False = no, True = yes
-
-        # Update state (for catching up after a disconnection)
-        # TODO Get state from channels too
-        self._state_cache = StateCache(
-            self.session.get_update_state(0), self._log)
 
         # Some further state for subclasses
         self._event_builders = []
@@ -492,6 +473,26 @@ class TelegramBaseClient(abc.ABC):
 
         # A place to store if channels are a megagroup or not (see `edit_admin`)
         self._megagroup_cache = {}
+
+        # This is backported from v2 in a very ad-hoc way just to get proper update handling
+        self._catch_up = catch_up
+        self._updates_queue = asyncio.Queue()
+        self._message_box = MessageBox()
+        # This entity cache is tailored for the messagebox and is not used for absolutely everything like _entity_cache
+        self._mb_entity_cache = MbEntityCache()  # required for proper update handling (to know when to getDifference)
+
+        self._sender = MTProtoSender(
+            self.session.auth_key,
+            loggers=self._log,
+            retries=self._connection_retries,
+            delay=self._retry_delay,
+            auto_reconnect=self._auto_reconnect,
+            connect_timeout=self._timeout,
+            auth_key_callback=self._auth_key_callback,
+            updates_queue=self._updates_queue,
+            auto_reconnect_callback=self._handle_auto_reconnect
+        )
+
 
     # endregion
 
@@ -567,6 +568,12 @@ class TelegramBaseClient(abc.ABC):
                 except OSError:
                     print('Failed to connect')
         """
+        # Workaround specific to SQLiteSession, which sometimes need to persist info after init.
+        # Since .save() is now async we can't do that in init. Instead we do it in the first connect.
+        if isinstance(self.session, SQLiteSession) and not self.session._init_saved:
+            await self.session.save()
+            self.session._init_saved = True
+
         if not await self._sender.connect(self._connection(
             self.session.server_address,
             self.session.port,
@@ -579,7 +586,24 @@ class TelegramBaseClient(abc.ABC):
             return
 
         self.session.auth_key = self._sender.auth_key
-        self.session.save()
+        await self.session.save()
+
+        if self._catch_up:
+            ss = SessionState(0, 0, False, 0, 0, 0, 0, None)
+            cs = []
+
+            for entity_id, state in await self.session.get_update_states():
+                if entity_id == 0:
+                    # TODO current session doesn't store self-user info but adding that is breaking on downstream session impls
+                    ss = SessionState(0, 0, False, state.pts, state.qts, int(state.date.timestamp()), state.seq, None)
+                else:
+                    cs.append(ChannelState(entity_id, state.pts))
+
+            self._message_box.load(ss, cs)
+            for state in cs:
+                entity = await self.session.get_input_entity(state.channel_id)
+                if entity:
+                    self._mb_entity_cache.put(Entity(EntityType.CHANNEL, entity.channel_id, entity.access_hash))
 
         self._init_request.query = functions.help.GetConfigRequest()
 
@@ -591,7 +615,13 @@ class TelegramBaseClient(abc.ABC):
         # result = await self._sender.send(GetLangPackRequest(self.lang_pack, self.lang_code))
         # print(result)
 
+        if self._message_box.is_empty():
+            me = await self.get_me()
+            if me:
+                await self._on_login(me)  # also calls GetState to initialize the MessageBox
+
         self._updates_handle = self.loop.create_task(self._update_loop())
+        self._keepalive_handle = self.loop.create_task(self._keepalive_loop())
 
     def is_connected(self: 'TelegramClient') -> bool:
         """
@@ -684,24 +714,26 @@ class TelegramBaseClient(abc.ABC):
 
         # trio's nurseries would handle this for us, but this is asyncio.
         # All tasks spawned in the background should properly be terminated.
-        if self._dispatching_updates_queue is None and self._updates_queue:
-            for task in self._updates_queue:
+        if self._event_handler_tasks:
+            for task in self._event_handler_tasks:
                 task.cancel()
 
-            await asyncio.wait(self._updates_queue)
-            self._updates_queue.clear()
+            await asyncio.wait(self._event_handler_tasks)
+            self._event_handler_tasks.clear()
 
-        pts, date = self._state_cache[None]
-        if pts and date:
-            self.session.set_update_state(0, types.updates.State(
-                pts=pts,
-                qts=0,
-                date=date,
-                seq=0,
-                unread_count=0
-            ))
+        entities = self._mb_entity_cache.get_all_entities()
 
-        self.session.close()
+        # Piggy-back on an arbitrary TL type with users and chats so the session can understand to read the entities.
+        # It doesn't matter if we put users in the list of chats.
+        await self.session.process_entities(types.contacts.ResolvedPeer(None, [e._as_input_peer() for e in entities], []))
+
+        ss, cs = self._message_box.session_state()
+        await self.session.set_update_state(0, types.updates.State(**ss, unread_count=0))
+        now = datetime.datetime.now()  # any datetime works; channels don't need it
+        for channel_id, pts in cs.items():
+            await self.session.set_update_state(channel_id, types.updates.State(pts, 0, now, 0, unread_count=0))
+
+        await self.session.close()
 
     async def _disconnect(self: 'TelegramClient'):
         """
@@ -712,7 +744,8 @@ class TelegramBaseClient(abc.ABC):
         """
         await self._sender.disconnect()
         await helpers._cancel(self._log[__name__],
-                              updates_handle=self._updates_handle)
+                              updates_handle=self._updates_handle,
+                              keepalive_handle=self._keepalive_handle)
 
     async def _switch_dc(self: 'TelegramClient', new_dc):
         """
@@ -726,17 +759,17 @@ class TelegramBaseClient(abc.ABC):
         # so it's not valid anymore. Set to None to force recreating it.
         self._sender.auth_key.key = None
         self.session.auth_key = None
-        self.session.save()
+        await self.session.save()
         await self._disconnect()
         return await self.connect()
 
-    def _auth_key_callback(self: 'TelegramClient', auth_key):
+    async def _auth_key_callback(self: 'TelegramClient', auth_key):
         """
         Callback from the sender whenever it needed to generate a
         new authorization key. This means we are not authorized.
         """
         self.session.auth_key = auth_key
-        self.session.save()
+        await self.session.save()
 
     # endregion
 
@@ -861,7 +894,7 @@ class TelegramBaseClient(abc.ABC):
         if not session:
             dc = await self._get_dc(cdn_redirect.dc_id, cdn=True)
             session = self.session.clone()
-            await session.set_dc(dc.id, dc.ip_address, dc.port)
+            session.set_dc(dc.id, dc.ip_address, dc.port)
             self._exported_sessions[cdn_redirect.dc_id] = session
 
         self._log[__name__].info('Creating new CDN client')
@@ -907,10 +940,6 @@ class TelegramBaseClient(abc.ABC):
             The result of the request (often a `TLObject`) or a list of
             results if more than one request was given.
         """
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def _handle_update(self: 'TelegramClient', update):
         raise NotImplementedError
 
     @abc.abstractmethod

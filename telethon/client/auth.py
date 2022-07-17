@@ -7,6 +7,7 @@ import warnings
 
 from .. import utils, helpers, errors, password as pwd_mod
 from ..tl import types, functions, custom
+from .._updates import SessionState
 
 if typing.TYPE_CHECKING:
     from .telegramclient import TelegramClient
@@ -371,7 +372,7 @@ class AuthMethods:
             self._tos = result.terms_of_service
             raise errors.PhoneNumberUnoccupiedError(request=request)
 
-        return self._on_login(result.user)
+        return await self._on_login(result.user)
 
     async def sign_up(
             self: 'TelegramClient',
@@ -466,9 +467,9 @@ class AuthMethods:
             await self(
                 functions.help.AcceptTermsOfServiceRequest(self._tos.id))
 
-        return self._on_login(result.user)
+        return await self._on_login(result.user)
 
-    def _on_login(self, user):
+    async def _on_login(self, user):
         """
         Callback called whenever the login or sign up process completes.
 
@@ -478,6 +479,9 @@ class AuthMethods:
         self._self_input_peer = utils.get_input_peer(user, allow_self=False)
         self._authorized = True
 
+        state = await self(functions.updates.GetStateRequest())
+        self._message_box.load(SessionState(0, 0, 0, state.pts, state.qts, int(state.date.timestamp()), state.seq, 0), [])
+
         return user
 
     async def send_code_request(
@@ -485,7 +489,8 @@ class AuthMethods:
             phone: str,
             *,
             force_sms: bool = False,
-            code_settings: types.CodeSettings = None) -> 'types.auth.SentCode':
+            code_settings: types.CodeSettings = None,
+            _retry_count: int = 0) -> 'types.auth.SentCode':
         """
         Sends the Telegram code needed to login to the given phone number.
 
@@ -521,7 +526,10 @@ class AuthMethods:
                 result = await self(functions.auth.SendCodeRequest(
                     phone, self.api_id, self.api_hash, code_settings))
             except errors.AuthRestartError:
-                return await self.send_code_request(phone, force_sms=force_sms, code_settings=code_settings)
+                if _retry_count > 2:
+                    raise
+                return await self.send_code_request(
+                    phone, force_sms=force_sms, code_settings=code_settings, _retry_count=_retry_count+1)
 
             # If we already sent a SMS, do not resend the code (hash may be empty)
             if isinstance(result.type, types.auth.SentCodeTypeSms):
@@ -536,8 +544,18 @@ class AuthMethods:
         self._phone = phone
 
         if force_sms:
-            result = await self(
-                functions.auth.ResendCodeRequest(phone, phone_hash))
+            try:
+                result = await self(
+                    functions.auth.ResendCodeRequest(phone, phone_hash))
+            except errors.PhoneCodeExpiredError:
+                if _retry_count > 2:
+                    raise
+                self._phone_code_hash.pop(phone, None)
+                self._log[__name__].info(
+                    "Phone code expired in ResendCodeRequest, requesting a new code"
+                )
+                return await self.send_code_request(
+                    phone, force_sms=False, _retry_count=_retry_count+1)
 
             self._phone_code_hash[phone] = result.phone_code_hash
 
@@ -601,10 +619,9 @@ class AuthMethods:
         self._bot = None
         self._self_input_peer = None
         self._authorized = False
-        self._state_cache.reset()
 
         await self.disconnect()
-        self.session.delete()
+        await self.session.delete()
         return True
 
     async def edit_2fa(

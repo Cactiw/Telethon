@@ -37,6 +37,7 @@ class SQLiteSession(MemorySession):
         super().__init__()
         self.filename = ':memory:'
         self.save_entities = True
+        self._init_saved = True
 
         if session_id:
             self.filename = session_id
@@ -55,7 +56,7 @@ class SQLiteSession(MemorySession):
                 self._upgrade_database(old=version)
                 c.execute("delete from version")
                 c.execute("insert into version values (?)", (CURRENT_VERSION,))
-                self.save()
+                self._init_saved = False
 
             # These values will be saved
             c.execute('select * from sessions')
@@ -109,7 +110,7 @@ class SQLiteSession(MemorySession):
             c.execute("insert into version values (?)", (CURRENT_VERSION,))
             self._update_session_table()
             c.close()
-            self.save()
+            self._init_saved = False
 
     def clone(self, to_instance=None):
         cloned = super().clone(to_instance)
@@ -201,7 +202,7 @@ class SQLiteSession(MemorySession):
         ))
         c.close()
 
-    def get_update_state(self, entity_id):
+    async def get_update_state(self, entity_id):
         row = self._execute('select pts, qts, date, seq from update_state '
                             'where id = ?', entity_id)
         if row:
@@ -210,12 +211,26 @@ class SQLiteSession(MemorySession):
                 date, tz=datetime.timezone.utc)
             return types.updates.State(pts, qts, date, seq, unread_count=0)
 
-    def set_update_state(self, entity_id, state):
+    async def set_update_state(self, entity_id, state):
         self._execute('insert or replace into update_state values (?,?,?,?,?)',
                       entity_id, state.pts, state.qts,
                       state.date.timestamp(), state.seq)
 
-    def save(self):
+    async def get_update_states(self):
+        c = self._cursor()
+        try:
+            rows = c.execute('select id, pts, qts, date, seq from update_state').fetchall()
+            return ((row[0], types.updates.State(
+                pts=row[1],
+                qts=row[2],
+                date=datetime.datetime.fromtimestamp(row[3], tz=datetime.timezone.utc),
+                seq=row[4],
+                unread_count=0)
+            ) for row in rows)
+        finally:
+            c.close()
+
+    async def save(self):
         """Saves the current session object as session_user_id.session"""
         # This is a no-op if there are no changes to commit, so there's
         # no need for us to keep track of an "unsaved changes" variable.
@@ -240,7 +255,7 @@ class SQLiteSession(MemorySession):
         finally:
             c.close()
 
-    def close(self):
+    async def close(self):
         """Closes the connection unless we're working in-memory"""
         if self.filename != ':memory:':
             if self._conn is not None:
@@ -248,7 +263,7 @@ class SQLiteSession(MemorySession):
                 self._conn.close()
                 self._conn = None
 
-    def delete(self):
+    async def delete(self):
         """Deletes the current session file"""
         if self.filename == ':memory:':
             return True
@@ -268,7 +283,7 @@ class SQLiteSession(MemorySession):
 
     # Entity processing
 
-    def process_entities(self, tlo):
+    async def process_entities(self, tlo):
         """
         Processes all the found entities on the given TLObject,
         unless .save_entities is False.
@@ -289,11 +304,11 @@ class SQLiteSession(MemorySession):
         finally:
             c.close()
 
-    def get_entity_rows_by_phone(self, phone):
+    async def get_entity_rows_by_phone(self, phone):
         return self._execute(
             'select id, hash from entities where phone = ?', phone)
 
-    def get_entity_rows_by_username(self, username):
+    async def get_entity_rows_by_username(self, username):
         c = self._cursor()
         try:
             results = c.execute(
@@ -314,11 +329,11 @@ class SQLiteSession(MemorySession):
         finally:
             c.close()
 
-    def get_entity_rows_by_name(self, name):
+    async def get_entity_rows_by_name(self, name):
         return self._execute(
             'select id, hash from entities where name = ?', name)
 
-    def get_entity_rows_by_id(self, id, exact=True):
+    async def get_entity_rows_by_id(self, id, exact=True):
         if exact:
             return self._execute(
                 'select id, hash from entities where id = ?', id)
@@ -332,7 +347,7 @@ class SQLiteSession(MemorySession):
 
     # File processing
 
-    def get_file(self, md5_digest, file_size, cls):
+    async def get_file(self, md5_digest, file_size, cls):
         row = self._execute(
             'select id, hash from sent_files '
             'where md5_digest = ? and file_size = ? and type = ?',
@@ -342,7 +357,7 @@ class SQLiteSession(MemorySession):
             # Both allowed classes have (id, access_hash) as parameters
             return cls(row[0], row[1])
 
-    def cache_file(self, md5_digest, file_size, instance):
+    async def cache_file(self, md5_digest, file_size, instance):
         if not isinstance(instance, (InputDocument, InputPhoto)):
             raise TypeError('Cannot cache %s instance' % type(instance))
 
