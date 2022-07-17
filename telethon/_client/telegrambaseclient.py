@@ -8,6 +8,7 @@ import time
 import typing
 import ipaddress
 import dataclasses
+import functools
 
 from .. import version, __name__ as __base_name__, _tl
 from .._crypto import rsa
@@ -131,7 +132,7 @@ def init(
 
     self._session = session
     # In-memory copy of the session's state to avoid a roundtrip as it contains commonly-accessed values.
-    self._session_state = None
+    self._session_state = _default_session_state()
 
     # Nice-to-have.
     self._request_retries = request_retries
@@ -140,13 +141,16 @@ def init(
     self._connect_timeout = connect_timeout
     self.flood_sleep_threshold = flood_sleep_threshold
     self._flood_waited_requests = {}  # prevent calls that would floodwait entirely
-    self._parse_mode = markdown
+    self._phone_code_hash = None  # used during login to prevent exposing the hash to end users
+    self._tos = None  # used during signup and when fetching tos (tos/expiry)
 
     # Update handling.
     self._catch_up = catch_up
     self._no_updates = not receive_updates
     self._updates_queue = asyncio.Queue(maxsize=max_queued_updates)
     self._updates_handle = None
+    self._update_handlers = []  # sorted list
+    self._dispatching_update_handlers = False  # while dispatching, if add/remove are called, we need to make a copy
     self._message_box = MessageBox()
     self._entity_cache = EntityCache()  # required for proper update handling (to know when to getDifference)
 
@@ -154,7 +158,7 @@ def init(
     if not api_id or not api_hash:
         raise ValueError(
             "Your API ID or Hash cannot be empty or None. "
-            "Refer to telethon.rtfd.io for more information.")
+            "Refer to docs.telethon.dev for more information.")
 
     if local_addr is not None:
         if use_ipv6 is False and ':' in local_addr:
@@ -182,7 +186,8 @@ def init(
         default_device_model = system.machine
     default_system_version = re.sub(r'-.+','',system.release)
 
-    self._init_request = _tl.fn.InitConnection(
+    self._init_request = functools.partial(
+        _tl.fn.InitConnection,
         api_id=self._api_id,
         device_model=device_model or default_device_model or 'Unknown',
         system_version=system_version or default_system_version or '1.0',
@@ -190,8 +195,6 @@ def init(
         lang_code=lang_code,
         system_lang_code=system_lang_code,
         lang_pack='',  # "langPacks are for official apps only"
-        query=None,
-        proxy=None
     )
 
     self._sender = MTProtoSender(
@@ -216,22 +219,26 @@ def set_flood_sleep_threshold(self, value):
     self._flood_sleep_threshold = min(value or 0, 24 * 60 * 60)
 
 
+def _default_session_state():
+    return SessionState(
+        user_id=0,
+        dc_id=DEFAULT_DC_ID,
+        bot=False,
+        pts=0,
+        qts=0,
+        date=0,
+        seq=0,
+        takeout_id=None,
+    )
+
+
 async def connect(self: 'TelegramClient') -> None:
     all_dcs = {dc.id: dc for dc in await self._session.get_all_dc()}
     self._session_state = await self._session.get_state()
 
     if self._session_state is None:
         try_fetch_user = False
-        self._session_state = SessionState(
-            user_id=0,
-            dc_id=DEFAULT_DC_ID,
-            bot=False,
-            pts=0,
-            qts=0,
-            date=0,
-            seq=0,
-            takeout_id=None,
-        )
+        self._session_state = _default_session_state()
     else:
         try_fetch_user = self._session_state.user_id == 0
         if self._catch_up:
@@ -272,10 +279,8 @@ async def connect(self: 'TelegramClient') -> None:
     # Need to send invokeWithLayer for things to work out.
     # Make the most out of this opportunity by also refreshing our state.
     # During the v1 to v2 migration, this also correctly sets the IPv* columns.
-    self._init_request.query = _tl.fn.help.GetConfig()
-
     config = await self._sender.send(_tl.fn.InvokeWithLayer(
-        _tl.LAYER, self._init_request
+        _tl.LAYER, self._init_request(query=_tl.fn.help.GetConfig())
     ))
 
     for dc in config.dc_options:
@@ -308,33 +313,12 @@ async def connect(self: 'TelegramClient') -> None:
 
     self._updates_handle = asyncio.create_task(self._update_loop())
 
+
 def is_connected(self: 'TelegramClient') -> bool:
-    sender = getattr(self, '_sender', None)
-    return sender and sender.is_connected()
+    return self._sender.is_connected()
+
 
 async def disconnect(self: 'TelegramClient'):
-    return await _disconnect_coro(self)
-
-def set_proxy(self: 'TelegramClient', proxy: typing.Union[tuple, dict]):
-    init_proxy = None
-
-    self._init_request.proxy = init_proxy
-    self._proxy = proxy
-
-    # While `await client.connect()` passes new proxy on each new call,
-    # auto-reconnect attempts use already set up `_connection` inside
-    # the `_sender`, so the only way to change proxy between those
-    # is to directly inject parameters.
-
-    connection = getattr(self._sender, "_connection", None)
-    if connection:
-        if isinstance(connection, conns.TcpMTProxy):
-            connection._ip = proxy[0]
-            connection._port = proxy[1]
-        else:
-            connection._proxy = proxy
-
-async def _disconnect_coro(self: 'TelegramClient'):
     await _disconnect(self)
 
     # Also clean-up all exported senders because we're done with them
@@ -351,6 +335,25 @@ async def _disconnect_coro(self: 'TelegramClient'):
 
         # If any was borrowed
         self._borrowed_senders.clear()
+
+
+def set_proxy(self: 'TelegramClient', proxy: typing.Union[tuple, dict]):
+    init_proxy = None
+
+    self._proxy = proxy
+
+    # While `await client.connect()` passes new proxy on each new call,
+    # auto-reconnect attempts use already set up `_connection` inside
+    # the `_sender`, so the only way to change proxy between those
+    # is to directly inject parameters.
+
+    connection = getattr(self._sender, "_connection", None)
+    if connection:
+        if isinstance(connection, conns.TcpMTProxy):
+            connection._ip = proxy[0]
+            connection._port = proxy[1]
+        else:
+            connection._proxy = proxy
 
 
 async def _disconnect(self: 'TelegramClient'):
@@ -408,8 +411,9 @@ async def _create_exported_sender(self: 'TelegramClient', dc_id):
     ))
     self._log[__name__].info('Exporting auth for new borrowed sender in %s', dc)
     auth = await self(_tl.fn.auth.ExportAuthorization(dc_id))
-    self._init_request.query = _tl.fn.auth.ImportAuthorization(id=auth.id, bytes=auth.bytes)
-    req = _tl.fn.InvokeWithLayer(_tl.LAYER, self._init_request)
+    req = _tl.fn.InvokeWithLayer(_tl.LAYER, self._init_request(
+        query=_tl.fn.auth.ImportAuthorization(id=auth.id, bytes=auth.bytes)
+    ))
     await sender.send(req)
     return sender
 

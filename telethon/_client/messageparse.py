@@ -4,6 +4,7 @@ import typing
 
 from .._misc import helpers, utils
 from ..types import _custom
+from ..types._custom.inputmessage import InputMessage
 from .. import _tl
 
 if typing.TYPE_CHECKING:
@@ -18,7 +19,7 @@ async def _replace_with_mention(self: 'TelegramClient', entities, i, user):
     try:
         entities[i] = _tl.InputMessageEntityMentionName(
             entities[i].offset, entities[i].length,
-            await self.get_input_entity(user)
+            await self._get_input_peer(user)
         )
         return True
     except (ValueError, TypeError):
@@ -29,15 +30,12 @@ async def _parse_message_text(self: 'TelegramClient', message, parse_mode):
     Returns a (parsed message, entities) tuple depending on ``parse_mode``.
     """
     if parse_mode == ():
-        parse_mode = self._parse_mode
+        parse, _ = InputMessage._default_parse_mode
     else:
-        parse_mode = utils.sanitize_parse_mode(parse_mode)
-
-    if not parse_mode:
-        return message, []
+        parse, _ = utils.sanitize_parse_mode(parse_mode)
 
     original_message = message
-    message, msg_entities = parse_mode.parse(message)
+    message, msg_entities = parse(message)
     if original_message and not message and not msg_entities:
         raise ValueError("Failed to parse message")
 
@@ -86,7 +84,7 @@ def _get_response_message(self: 'TelegramClient', request, result, input_chat):
 
         elif isinstance(update, (
                 _tl.UpdateNewChannelMessage, _tl.UpdateNewMessage)):
-            update.message = _custom.Message._new(self, update.message, entities, input_chat)
+            message = _custom.Message._new(self, update.message, entities, input_chat)
 
             # Pinning a message with `updatePinnedMessage` seems to
             # always produce a service message we can't map so return
@@ -96,20 +94,20 @@ def _get_response_message(self: 'TelegramClient', request, result, input_chat):
             #
             # TODO this method is getting messier and messier as time goes on
             if hasattr(request, 'random_id') or utils.is_list_like(request):
-                id_to_message[update.message.id] = update.message
+                id_to_message[message.id] = message
             else:
-                return update.message
+                return message
 
         elif (isinstance(update, _tl.UpdateEditMessage)
                 and helpers._entity_type(request.peer) != helpers._EntityType.CHANNEL):
-            update.message = _custom.Message._new(self, update.message, entities, input_chat)
+            message = _custom.Message._new(self, update.message, entities, input_chat)
 
             # Live locations use `sendMedia` but Telegram responds with
             # `updateEditMessage`, which means we won't have `id` field.
             if hasattr(request, 'random_id'):
-                id_to_message[update.message.id] = update.message
-            elif request.id == update.message.id:
-                return update.message
+                id_to_message[message.id] = message
+            elif request.id == message.id:
+                return message
 
         elif (isinstance(update, _tl.UpdateEditChannelMessage)
                 and utils.get_peer_id(request.peer) ==

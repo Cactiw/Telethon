@@ -20,9 +20,6 @@ class Dialog:
         folder_id (`folder_id`):
             The folder ID that this dialog belongs to.
 
-        archived (`bool`):
-            Whether this dialog is archived or not (``folder_id is None``).
-
         message (`Message <telethon.tl.custom.message.Message>`):
             The last message sent on this dialog. Note that this member
             will not be updated when new messages arrive, it's only set
@@ -55,6 +52,10 @@ class Dialog:
             How many mentions are currently unread in this dialog. Note that
             this value won't update when new messages arrive.
 
+        unread_reactions_count (`int`):
+            How many reactions are currently unread in this dialog. Note that
+            this value won't update when new messages arrive.
+
         draft (`Draft <telethon.tl.custom.draft.Draft>`):
             The draft object in this dialog. It will not be `None`,
             so you can call ``draft.set_message(...)``.
@@ -75,7 +76,6 @@ class Dialog:
         self.dialog = dialog
         self.pinned = bool(dialog.pinned)
         self.folder_id = dialog.folder_id
-        self.archived = dialog.folder_id is not None
         self.message = message
         self.date = getattr(self.message, 'date', None)
 
@@ -86,6 +86,7 @@ class Dialog:
 
         self.unread_count = dialog.unread_count
         self.unread_mentions_count = dialog.unread_mentions_count
+        self.unread_reactions_count = dialog.unread_reactions_count
 
         self.draft = Draft(client, self.entity, self.dialog.draft)
 
@@ -116,33 +117,6 @@ class Dialog:
         # the `Chat` is deactivated (in which case we don't kick ourselves,
         # or it would raise `PEER_ID_INVALID`).
         await self._client.delete_dialog(self.entity, revoke=revoke)
-
-    async def archive(self, folder=1):
-        """
-        Archives (or un-archives) this dialog.
-
-        Args:
-            folder (`int`, optional):
-                The folder to which the dialog should be archived to.
-
-                If you want to "un-archive" it, use ``folder=0``.
-
-        Returns:
-            The :tl:`Updates` object that the request produces.
-
-        Example:
-
-            .. code-block:: python
-
-                # Archiving
-                dialog.archive()
-
-                # Un-archiving
-                dialog.archive(0)
-        """
-        return await self._client(_tl.fn.folders.EditPeerFolders([
-            _tl.InputFolderPeer(self.input_entity, folder_id=folder)
-        ]))
 
     def to_dict(self):
         return {

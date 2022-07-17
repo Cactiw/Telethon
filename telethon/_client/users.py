@@ -3,12 +3,14 @@ import datetime
 import itertools
 import time
 import typing
+import dataclasses
 
 from ..errors._custom import MultiError
 from ..errors._rpcbase import RpcError, ServerError, FloodError, InvalidDcError, UnauthorizedError
 from .._misc import helpers, utils, hints
 from .._sessions.types import Entity
 from .. import errors, _tl
+from ..types import _custom
 from .account import ignore_takeout
 
 _NOT_A_REQUEST = lambda: TypeError('You can only invoke requests, not types!')
@@ -35,10 +37,11 @@ async def _call(self: 'TelegramClient', sender, request, ordered=False, flood_sl
     if flood_sleep_threshold is None:
         flood_sleep_threshold = self.flood_sleep_threshold
     requests = (request if utils.is_list_like(request) else (request,))
+    new_requests = []
     for r in requests:
         if not isinstance(r, _tl.TLRequest):
             raise _NOT_A_REQUEST()
-        await r.resolve(self, utils)
+        r = await r._resolve(self, utils)
 
         # Avoid making the request if it's already in a flood wait
         if r.CONSTRUCTOR_ID in self._flood_waited_requests:
@@ -58,6 +61,9 @@ async def _call(self: 'TelegramClient', sender, request, ordered=False, flood_sl
 
         if self._no_updates:
             r = _tl.fn.InvokeWithoutUpdates(r)
+
+        new_requests.append(r)
+    request = new_requests if utils.is_list_like(request) else new_requests[0]
 
     request_index = 0
     last_error = None
@@ -126,11 +132,10 @@ async def _call(self: 'TelegramClient', sender, request, ordered=False, flood_sl
     raise last_error
 
 
-async def get_me(self: 'TelegramClient', input_peer: bool = False) \
+async def get_me(self: 'TelegramClient') \
         -> 'typing.Union[_tl.User, _tl.InputPeerUser]':
     try:
-        me = (await self(_tl.fn.users.GetUsers([_tl.InputUserSelf()])))[0]
-        return utils.get_input_peer(me, allow_self=False) if input_peer else me
+        return _custom.User._new(self, (await self(_tl.fn.users.GetUsers([_tl.InputUserSelf()])))[0])
     except UnauthorizedError:
         return None
 
@@ -145,9 +150,10 @@ async def is_user_authorized(self: 'TelegramClient') -> bool:
     except RpcError:
         return False
 
-async def get_entity(
+async def get_profile(
         self: 'TelegramClient',
-        entity: 'hints.EntitiesLike') -> 'hints.Entity':
+        profile: 'hints.DialogsLike') -> 'hints.Entity':
+    entity = profile
     single = not utils.is_list_like(entity)
     if single:
         entity = (entity,)
@@ -161,7 +167,7 @@ async def get_entity(
         if isinstance(x, str):
             inputs.append(x)
         else:
-            inputs.append(await self.get_input_entity(x))
+            inputs.append(await self._get_input_peer(x))
 
     lists = {
         helpers._EntityType.USER: [],
@@ -215,9 +221,9 @@ async def get_entity(
 
     return result[0] if single else result
 
-async def get_input_entity(
+async def _get_input_peer(
         self: 'TelegramClient',
-        peer: 'hints.EntityLike') -> '_tl.TypeInputPeer':
+        peer: 'hints.DialogLike') -> '_tl.TypeInputPeer':
     # Short-circuit if the input parameter directly maps to an InputPeer
     try:
         return utils.get_input_peer(peer)
@@ -237,11 +243,11 @@ async def get_input_entity(
         entity = await self._session.get_entity(None, peer_id)
         if entity:
             if entity.ty in (Entity.USER, Entity.BOT):
-                return _tl.InputPeerUser(entity.id, entity.access_hash)
+                return _tl.InputPeerUser(entity.id, entity.hash)
             elif entity.ty in (Entity.GROUP):
                 return _tl.InputPeerChat(peer.chat_id)
             elif entity.ty in (Entity.CHANNEL, Entity.MEGAGROUP, Entity.GIGAGROUP):
-                return _tl.InputPeerChannel(entity.id, entity.access_hash)
+                return _tl.InputPeerChannel(entity.id, entity.hash)
 
     # Only network left to try
     if isinstance(peer, str):
@@ -276,27 +282,27 @@ async def get_input_entity(
             pass
 
     raise ValueError(
-        'Could not find the input entity for {} ({}). Please read https://'
+        'Could not find the input peer for {} ({}). Please read https://'
         'docs.telethon.dev/en/latest/concepts/entities.html to'
         ' find out more details.'
         .format(peer, type(peer).__name__)
     )
 
-async def get_peer_id(
+async def _get_peer_id(
         self: 'TelegramClient',
-        peer: 'hints.EntityLike') -> int:
+        peer: 'hints.DialogLike') -> int:
     if isinstance(peer, int):
         return utils.get_peer_id(peer)
 
     try:
         if peer.SUBCLASS_OF_ID not in (0x2d45687, 0xc91c90b6):
             # 0x2d45687, 0xc91c90b6 == crc32(b'Peer') and b'InputPeer'
-            peer = await self.get_input_entity(peer)
+            peer = await self._get_input_peer(peer)
     except AttributeError:
-        peer = await self.get_input_entity(peer)
+        peer = await self._get_input_peer(peer)
 
     if isinstance(peer, _tl.InputPeerSelf):
-        peer = await self.get_me(input_peer=True)
+        peer = _tl.PeerUser(self._session_state.user_id)
 
     return utils.get_peer_id(peer)
 
@@ -367,14 +373,13 @@ async def _get_input_dialog(self: 'TelegramClient', dialog):
     """
     try:
         if dialog.SUBCLASS_OF_ID == 0xa21c9795:  # crc32(b'InputDialogPeer')
-            dialog.peer = await self.get_input_entity(dialog.peer)
-            return dialog
+            return dataclasses.replace(dialog, peer=await self._get_input_peer(dialog.peer))
         elif dialog.SUBCLASS_OF_ID == 0xc91c90b6:  # crc32(b'InputPeer')
             return _tl.InputDialogPeer(dialog)
     except AttributeError:
         pass
 
-    return _tl.InputDialogPeer(await self.get_input_entity(dialog))
+    return _tl.InputDialogPeer(await self._get_input_peer(dialog))
 
 async def _get_input_notify(self: 'TelegramClient', notify):
     """
@@ -385,9 +390,9 @@ async def _get_input_notify(self: 'TelegramClient', notify):
     try:
         if notify.SUBCLASS_OF_ID == 0x58981615:
             if isinstance(notify, _tl.InputNotifyPeer):
-                notify.peer = await self.get_input_entity(notify.peer)
+                return dataclasses.replace(notify, peer=await self._get_input_peer(notify.peer))
             return notify
     except AttributeError:
         pass
 
-    return _tl.InputNotifyPeer(await self.get_input_entity(notify))
+    return _tl.InputNotifyPeer(await self._get_input_peer(notify))

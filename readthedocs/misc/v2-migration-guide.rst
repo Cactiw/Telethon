@@ -54,6 +54,7 @@ and identifier, rather than just the number.
 
 // TODO we DEFINITELY need to provide a way to "upgrade" old ids
 // TODO and storing type+number by hand is a pain, provide better alternative
+// TODO get_peer_id is gone now too!
 
 
 Synchronous compatibility mode has been removed
@@ -73,6 +74,66 @@ removed. This implies:
   * ``run_until_disconnected``
 
 // TODO provide standalone alternative for this?
+
+
+Overhaul of events and updates
+------------------------------
+
+Updates produced by the client are now also processed by your event handlers.
+Before, if you had some code listening for new outgoing messages, only messages you sent with
+another client, such as from Telegram Desktop, would be processed. Now, if your own code uses
+``client.send_message``, you will also receive the new message event. Be careful, as this can
+easily lead to "loops" (a new outgoing message can trigger ``client.send_message``, which
+triggers a new outgoing message and the cycle repeats)!
+
+There are no longer "event builders" and "event" types. Now there are only events, and you
+register the type of events you want, not an instance. Because of this, the way filters are
+specified have also changed:
+
+.. code-block:: python
+
+    # OLD
+    @client.on(events.NewMessage(chats=...))
+    async def handler(event):
+        pass
+
+    # NEW
+    @client.on(events.NewMessage, chats=...)
+    async def handler(event): # ^^         ^
+        pass
+
+This also means filters are unified, although not all filters have an effect on all events types.
+Type hinting is now done through ``events.NewMessage`` and not ``events.NewMessage.Event``.
+
+The filter rework also enables more features. For example, you can now mutate a ``chats`` filter
+to add or remove a chat that needs to be received by a handler, rather than having to remove and
+re-add the event handler.
+
+The ``from_users`` filter has been renamed to ``senders``.
+
+The ``inbox`` filter for ``events.MessageRead`` has been removed, in favour of ``outgoing`` and
+``incoming``.
+
+``events.register``, ``events.unregister`` and ``events.is_handler`` have been removed. There is
+no longer anything special about methods which are handlers, and they are no longer monkey-patched.
+Because pre-defining the event type to handle without a client was useful, you can now instead use
+the following syntax:
+
+.. code-block:: python
+
+    # OLD
+    @events.register(events.NewMessage)
+    async def handler(event):
+        pass
+
+    # NEW
+    async def handler(event: events.NewMessage):
+        pass  #       ^^^^^^^^^^^^^^^^^^^^^^^^
+
+As a bonus, you only need to type-hint once, and both your IDE and Telethon will understand what
+you meant. This is similar to Python's ``@dataclass`` which uses type hints.
+
+// TODO document filter creation and usage, showcase how to mutate them
 
 
 Complete overhaul of session files
@@ -292,8 +353,8 @@ results into a list:
 // TODO does the download really need to be special? get download is kind of weird though
 
 
-Raw API has been renamed and is now considered private
-------------------------------------------------------
+Raw API has been renamed and is now immutable and considered private
+--------------------------------------------------------------------
 
 The subpackage holding the raw API methods has been renamed from ``tl`` to ``_tl`` in order to
 signal that these are prone to change across minor version bumps (the ``y`` in version ``x.y.z``).
@@ -305,6 +366,10 @@ change on layer upgrades across minor version bumps).
 The ``Request`` suffix has been removed from the classes inside ``tl.functions``.
 
 The ``tl.types`` is now simply ``_tl``, and the ``tl.functions`` is now ``_tl.fn``.
+
+Both the raw API types and functions are now immutable. This can enable optimizations in the
+future, such as greatly reducing the number of intermediate objects created (something worth
+doing for deeply-nested objects).
 
 Some examples:
 
@@ -375,7 +440,7 @@ The following modules have been moved inside ``_misc``:
 * ``helpers.py``
 * ``hints.py``
 * ``password.py``
-* ``requestiter.py`
+* ``requestiter.py``
 * ``statecache.py``
 * ``utils.py``
 
@@ -411,6 +476,33 @@ the session ever was invalid. If you want the old behaviour, you now need to be 
 
 Note that you do not need to ``await`` the call to ``.start()`` if you are going to use the result
 in a context-manager (but it's okay if you put the ``await``).
+
+
+Changes to sending messages and files
+-------------------------------------
+
+When sending messages or files, there is no longer a parse mode. Instead, the ``markdown`` or
+``html`` parameters can be used instead of the (plaintext) ``message``.
+
+.. code-block:: python
+
+    await client.send_message(chat, 'Default formatting (_markdown_)')
+    await client.send_message(chat, html='Force <em>HTML</em> formatting')
+    await client.send_message(chat, markdown='Force **Markdown** formatting')
+
+These 3 parameters are exclusive with each other (you can only use one). The goal here is to make
+it consistent with the custom ``Message`` class, which also offers ``.markdown`` and ``.html``
+properties to obtain the correctly-formatted text, regardless of the default parse mode, and to
+get rid of some implicit behaviour. It's also more convenient to set just one parameter than two
+(the message and the parse mode separatedly).
+
+Although the goal is to reduce raw API exposure, ``formatting_entities`` stays, because it's the
+only feasible way to manually specify them.
+
+When sending files, you can no longer pass a list of attributes. This was a common workaround to
+set video size, audio duration, and so on. Now, proper parameters are available. The goal is to
+hide raw API as much as possible (which lets the library hide future breaking changes as much as
+possible). One can still use raw API if really needed.
 
 
 Several methods have been removed from the client
@@ -458,8 +550,42 @@ The following ``utils`` methods no longer exist or have been made private:
 // TODO provide the new clean utils
 
 
-Changes on how to configure filters for certain client methods
---------------------------------------------------------------
+Changes to many friendly methods in the client
+----------------------------------------------
+
+Some of the parameters used to initialize the ``TelegramClient`` have been renamed to be clearer:
+
+* ``timeout`` is now ``connect_timeout``.
+* ``connection_retries`` is now ``connect_retries``.
+* ``retry_delay`` is now ``connect_retry_delay``.
+* ``raise_last_call_error`` has been removed and is now the default. This means you won't get a
+  ``ValueError`` if an API call fails multiple times, but rather the original error.
+* ``connection`` to change the connection mode has been removed for the time being.
+* ``sequential_updates`` has been removed for the time being.
+
+// TODO document new parameters too
+
+``client.send_code_request`` no longer has ``force_sms`` (it was broken and was never reliable).
+
+``client.send_read_acknowledge`` is now ``client.mark_read``, consistent with the method of
+``Message``, being shorter and less awkward to type. The method now only supports a single
+message, not a list (the list was a lie, because all messages up to the one with the highest
+ID were marked as read, meaning one could not leave unread gaps). ``max_id`` is now removed,
+since it has the same meaning as the message to mark as read. The method no longer can clear
+mentions without marking the chat as read, but this should not be an issue in practice.
+
+Every ``client.action`` can now be directly ``await``-ed, not just ``'cancel'``.
+
+``client.forward_messages`` now requires a list to be specified. The intention is to make it clear
+that the method forwards message\ **s** and to reduce the number of strange allowed values, which
+needlessly complicate the code. If you still need to forward a single message, manually construct
+a list with ``[message]`` or use ``Message.forward_to``.
+
+``client.delete_messages`` now requires a list to be specified, with the same rationale as forward.
+
+``client.get_me`` no longer has an ``input_peer`` parameter. The goal is to hide raw API as much
+as possible. Input peers are mostly an implementation detail the library needs to deal with
+Telegram's API.
 
 Before, ``client.iter_participants`` (and ``get_participants``) would expect a type or instance
 of the raw Telegram definition as a ``filter``. Now, this ``filter`` expects a string.
@@ -472,6 +598,20 @@ The supported values are:
 * ``'contact'``
 
 If you prefer to avoid hardcoding strings, you may use ``telethon.enums.Participant``.
+
+The size selector for ``client.download_profile_photo`` and ``client.download_media`` is now using
+an enumeration:
+
+.. code-block:: python
+
+    from telethon import enums
+
+    await client.download_profile_photo(user, thumb=enums.Size.ORIGINAL)
+
+This new selection mode is also smart enough to pick the "next best" size if the specified one
+is not available. The parameter is known as ``thumb`` and not ``size`` because documents don't
+have a "size", they have thumbnails of different size. For profile photos, the thumbnail size is
+also used.
 
 // TODO maintain support for the old way of doing it?
 // TODO now that there's a custom filter, filter client-side for small chats?
@@ -500,13 +640,100 @@ The message sender no longer is the channel when no sender is provided by Telegr
 to patch this value for channels to be the same as the chat, but now it will be faithful to
 Telegram's value.
 
-In order to avoid breaking more code than strictly necessary, ``.raw_text`` will remain a synonym
-of ``.message``, and ``.text`` will still be the text formatted through the ``client.parse_mode``.
-However, you're encouraged to change uses of ``.raw_text`` with ``.message``, and ``.text`` with
-either ``.md_text`` or ``.html_text`` as needed. This is because both ``.text`` and ``.raw_text``
-may disappear in future versions, and their behaviour is not immediately obvious.
 
-// TODO actually provide the things mentioned here
+Overhaul of users and chats are no longer raw API types
+-------------------------------------------------------
+
+Users and chats are no longer raw API types. The goal is to reduce the amount of raw API exposed
+to the user, and to provide less confusing naming. This also means that **the sender and chat of
+messages and events is now a different type**. If you were using `isinstance` to check the types,
+you will need to update that code. However, if you were accessing things like the ``first_name``
+or ``username``, you will be fine.
+
+Raw API is not affected by this change. When using it, the raw :tl:`User`, :tl:`Chat` and
+:tl:`Channel` are still returned.
+
+For friendly methods and events, There are now two main entity types, `User` and `Chat`.
+`User`\ s are active entities which can send messages and interact with eachother. There is an
+account controlling them. `Chat`\ s are passive entities where multiple users can join and
+interact with each other. This includes small groups, supergroups, and broadcast channels.
+
+``event.get_sender``, ``event.sender``, ``event.get_chat``, and ``event.chat`` (as well as
+the same methods on ``message`` and elsewhere) now return this new type. The ``sender`` and
+``chat`` is **now always returned** (where it makes sense, so no sender in channel messages),
+even if Telegram did not include information about it in the update. This means you can use
+send messages to ``event.chat`` without worrying if Telegram included this information or not,
+or even access ``event.chat.id``. This was often a papercut. However, if you need other
+information like the title, you might still need to use ``await event.get_chat()``, which is
+used to signify an API call might be necessary.
+
+``event.get_input_sender``, ``event.input_sender``, ``message.get_input_sender`` and
+``message.input_sender`` (among other variations) have been removed. Instead, a new ``compact``
+method has been added to the new `User` and `Chat` types, which can be used to obtain a compact
+representation of the sender. The "input" terminology is confusing for end-users, as it's mostly
+an implementation detail of friendly methods. Because the return type would've been different
+had these methods been kept, one would have had to review code using them regardless.
+
+What this means is that, if you now want a compact way to store a user or chat for later use,
+you should use ``compact``:
+
+.. code-block:: python
+
+    compacted_user = message.sender.compact()
+    # store compacted_user in a database or elsewhere for later use
+
+Public methods accept this type as input parameters. This means you can send messages to a
+compacted user or chat, for example.
+
+``event.is_private``, ``event.is_group`` and ``event.is_channel`` have **been removed** (among
+other variations, such as in ``message``). It didn't make much sense to ask "is this event a
+group", and there is no such thing as "group messages" currently either. Instead, it's sensible
+to ask if the sender of a message is a group, or the chat of an event is a channel. New properties
+have been added to both the `User` and `Chat` classes:
+
+* ``.is_user`` will always be `True` for `User` and `False` for `Chat`.
+* ``.is_group`` will be `False` for `User` and be `True` for small group chats and supergroups.
+* ``.is_broadcast`` will be `False` for `User` and `True` for broadcast channels and broadcast groups.
+
+Because the properties exist both in `User` and `Chat`, you do not need use `isinstance` to check
+if a sender is a channel or if a chat is a user.
+
+Some fields of the new `User` type differ from the naming or value type of its raw API counterpart:
+
+* ``user.restriction_reason`` has been renamed to ``restriction_reasons`` (with a trailing **s**)
+  and now always returns a list.
+* ``user.bot_chat_history`` has been renamed to ``user.bot_info.chat_history_access``.
+* ``user.bot_nochats`` has been renamed to ``user.bot_info.private_only``.
+* ``user.bot_inline_geo`` has been renamed to ``user.bot_info.inline_geo``.
+* ``user.bot_info_version`` has been renamed to ``user.bot_info.version``.
+* ``user.bot_inline_placeholder`` has been renamed to ``user.bot_info.inline_placeholder``.
+
+The new ``user.bot_info`` field will be `None` for non-bots. The goal is to unify where this
+information is found and reduce clutter in the main ``user`` type.
+
+Some fields of the new `Chat` type differ from the naming or value type of its raw API counterpart:
+
+* ``chat.date`` is currently not available. It's either the chat creation or join date, but due
+  to this inconsistency, it's not included to allow for a better solution in the future.
+* ``chat.has_link`` is currently not available, to allow for a better alternative in the future.
+* ``chat.has_geo`` is currently not available, to allow for a better alternative in the future.
+* ``chat.call_active`` is currently not available, until it's decided what to do about calls.
+* ``chat.call_not_empty`` is currently not available, until it's decided what to do about calls.
+* ``chat.version`` was removed. It's an implementation detail.
+* ``chat.min`` was removed. It's an implementation detail.
+* ``chat.deactivated`` was removed. It's redundant with ``chat.migrated_to``.
+* ``chat.forbidden`` has been added as a replacement for ``isinstance(chat, (ChatForbidden, ChannelForbidden))``.
+* ``chat.forbidden_until`` has been added as a replacement for ``until_date`` in forbidden chats.
+* ``chat.restriction_reason`` has been renamed to ``restriction_reasons`` (with a trailing **s**)
+  and now always returns a list.
+* ``chat.migrated_to`` no longer returns a raw type, and instead returns this new `Chat` type.
+
+If you have a need for these, please step in, and explain your use case, so we can work together
+to implement a proper design.
+
+Both the new `User` and `Chat` types offer a ``fetch`` method, which can be used to refetch the
+instance with fresh information, including the full information about the user (such as the user's
+biography or a chat's about description).
 
 
 Using a flat list to define buttons will now create rows and not columns
@@ -529,9 +756,9 @@ If you still want the old behaviour, wrap the list inside another list:
 
     bot.send_message(chat, message, buttons=[[
         #                                   +
-        Button.inline('top'),
-        Button.inline('middle'),
-        Button.inline('bottom'),
+        Button.inline('left'),
+        Button.inline('center'),
+        Button.inline('right'),
     ]])
     #+
 
@@ -619,6 +846,24 @@ just fine This approach can also be easily persisted, and you can adjust it to y
 your handlers much more easily.
 
 // TODO provide standalone alternative for this?
+
+
+Certain client properties and methods are now private or no longer exist
+------------------------------------------------------------------------
+
+The ``client.loop`` property has been removed. ``asyncio`` has been moving towards implicit loops,
+so this is the next step. Async methods can be launched with the much simpler ``asyncio.run`` (as
+opposed to the old ``client.loop.run_until_complete``).
+
+The ``client.upload_file`` method has been removed. It's a low-level method users should not need
+to use. Its only purpose could have been to implement a cache of sorts, but this is something the
+library needs to do, not the users.
+
+The methods to deal with folders have been removed. The goal is to find and offer a better
+interface to deal with both folders and archived chats in the future if there is demand for it.
+This includes the removal of ``client.edit_folder``, ``Dialog.archive``, ``Dialog.archived``, and
+the ``archived`` parameter of ``client.get_dialogs``. The ``folder`` parameter remains as it's
+unlikely to change.
 
 
 Deleting messages now returns a more useful value
@@ -729,47 +974,18 @@ Now the URL is returned. You can still use ``webbrowser.open`` to get the old be
 
 ---
 
-you can no longer pass an attributes list because the constructor is now nice.
-use raw api if you really need it.
-goal is to hide raw api from high level api. sorry.
-
-no parsemode. use the correct parameter. it's more convenient than setting two.
-
-formatting_entities stays because otherwise it's the only feasible way to manually specify it.
-
 todo update send_message and send_file docs (well review all functions)
 
 album overhaul. use a list of Message instead.
 
-size selector for download_profile_photo and download_media is now different
+is_connected is now a property (consistent with the rest of ``is_`` properties)
 
-still thumb because otherwise documents are weird.
-
-keep support for explicit size instance?
-
-renamed send_read_acknowledge. add send_read_acknowledge as alias for mark_read?
-
-force sms removed as it was broken anyway and not very reliable
-
-you can now await client.action for a one-off any action not just cancel
-
-fwd msg and delete msg now mandate a list rather than a single int or msg
-(since there's msg.delete and msg.forward_to this should be no issue).
-they are meant to work on lists.
-
-also mark read only supports single now. a list would just be max anyway.
-removed max id since it's not really of much use.
-
-client loop has been removed. embrace implicit loop as asyncio does now
-
-renamed some client params, and made other privates
-    timeout -> connect_timeout
-    connection_retries -> connect_retries
-    retry_delay -> connect_retry_delay
-
-sequential_updates is gone
-connection type is gone
-
-raise_last_call_error is now the default rather than ValueError
-
-self-produced updates like getmessage now also trigger a handler
+send_code_request now returns a custom type (reducing raw api).
+sign_in no longer has phone or phone_hash (these are impl details, and now it's less error prone). also mandatory code=. also no longer is a no-op if already logged in. different error for sign up required.
+send code / sign in now only expect a single phone. resend code with new phone is send code, not resend.
+sign_up code is also now a kwarg. and no longer noop if already loggedin.
+start also mandates phone= or password= as kwarg.
+qrlogin expires has been replaced with timeout and expired for parity with tos and auth. the goal is to hide the error-prone system clock and instead use asyncio's clock. recreate was removed (just call qr_login again; parity with get_tos). class renamed to QrLogin. now must be used in a contextmgr to prevent misuse.
+"entity" parameters have been renamed to "dialog" (user or chat expected) or "chat" (only chats expected), "profile" (if that makes sense). the goal is to move away from the entity terminology. this is intended to be a documentation change, but because the parameters were renamed, it's breaking. the expected usage of positional arguments is mostly unaffected. this includes the EntityLike hint.
+download_media param renamed message to media. iter_download file to media too
+less types are supported to get entity (exact names, private links are undocumented but may work). get_entity is get_profile. get_input_entity is gone. get_peer_id is gone (if the isntance needs to be fetched anyway just use get_profile).

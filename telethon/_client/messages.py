@@ -3,6 +3,8 @@ import itertools
 import time
 import typing
 import warnings
+import dataclasses
+import os
 
 from .._misc import helpers, utils, requestiter, hints
 from ..types import _custom
@@ -26,7 +28,7 @@ class _MessagesIter(requestiter.RequestIter):
     ):
         # Note that entity being `None` will perform a global search.
         if entity:
-            self.entity = await self.client.get_input_entity(entity)
+            self.entity = await self.client._get_input_peer(entity)
         else:
             self.entity = None
             if self.reverse:
@@ -60,8 +62,8 @@ class _MessagesIter(requestiter.RequestIter):
                 offset_id = 1
 
         if from_user:
-            from_user = await self.client.get_input_entity(from_user)
-            self.from_id = await self.client.get_peer_id(from_user)
+            from_user = await self.client._get_input_peer(from_user)
+            self.from_id = await self.client._get_peer_id(from_user)
         else:
             self.from_id = None
 
@@ -140,9 +142,9 @@ class _MessagesIter(requestiter.RequestIter):
             # trigger `RPC_CALL_FAIL` which is "internal issues"...
             if not isinstance(filter, _tl.InputMessagesFilterEmpty) \
                     and offset_date and not search and not offset_id:
-                async for m in self.client.iter_messages(
+                async for m in self.client.get_messages(
                         self.entity, 1, offset_date=offset_date):
-                    self.request.offset_id = m.id + 1
+                    self.request = dataclasses.replace(self.request, offset_id=m.id + 1)
         else:
             self.request = _tl.fn.messages.GetHistory(
                 peer=self.entity,
@@ -178,10 +180,10 @@ class _MessagesIter(requestiter.RequestIter):
         self.last_id = 0 if self.reverse else float('inf')
 
     async def _load_next_chunk(self):
-        self.request.limit = min(self.left, _MAX_CHUNK_SIZE)
+        self.request = dataclasses.replace(self.request, limit=min(self.left, _MAX_CHUNK_SIZE))
         if self.reverse and self.request.limit != _MAX_CHUNK_SIZE:
             # Remember that we need -limit when going in reverse
-            self.request.add_offset = self.add_offset - self.request.limit
+            self.request = dataclasses.replace(self.request, add_offset=self.add_offset - self.request.limit)
 
         r = await self.client(self.request)
         self.total = getattr(r, 'count', len(r.messages))
@@ -241,28 +243,28 @@ class _MessagesIter(requestiter.RequestIter):
         """
         After making the request, update its offset with the last message.
         """
-        self.request.offset_id = last_message.id
+        self.request = dataclasses.replace(self.request, offset_id=last_message.id)
         if self.reverse:
             # We want to skip the one we already have
-            self.request.offset_id += 1
+            self.request = dataclasses.replace(self.request, offset_id=self.request.offset_id + 1)
 
         if isinstance(self.request, _tl.fn.messages.Search):
             # Unlike getHistory and searchGlobal that use *offset* date,
             # this is *max* date. This means that doing a search in reverse
             # will break it. Since it's not really needed once we're going
             # (only for the first request), it's safe to just clear it off.
-            self.request.max_date = None
+            self.request = dataclasses.replace(self.request, max_date=None)
         else:
             # getHistory, searchGlobal and getReplies call it offset_date
-            self.request.offset_date = last_message.date
+            self.request = dataclasses.replace(self.request, offset_date=last_message.date)
 
         if isinstance(self.request, _tl.fn.messages.SearchGlobal):
             if last_message.input_chat:
-                self.request.offset_peer = last_message.input_chat
+                self.request = dataclasses.replace(self.request, offset_peer=last_message.input_chat)
             else:
-                self.request.offset_peer = _tl.InputPeerEmpty()
+                self.request = dataclasses.replace(self.request, offset_peer=_tl.InputPeerEmpty())
 
-            self.request.offset_rate = getattr(response, 'next_rate', 0)
+            self.request = dataclasses.replace(self.request, offset_rate=getattr(response, 'next_rate', 0))
 
 
 class _IDsIter(requestiter.RequestIter):
@@ -270,7 +272,7 @@ class _IDsIter(requestiter.RequestIter):
         self.total = len(ids)
         self._ids = list(reversed(ids)) if self.reverse else ids
         self._offset = 0
-        self._entity = (await self.client.get_input_entity(entity)) if entity else None
+        self._entity = (await self.client._get_input_peer(entity)) if entity else None
         self._ty = helpers._entity_type(self._entity) if self._entity else None
 
         # 30s flood wait every 300 messages (3 requests of 100 each, 30 of 10, etc.)
@@ -320,17 +322,17 @@ class _IDsIter(requestiter.RequestIter):
                 self.buffer.append(_custom.Message._new(self.client, message, entities, self._entity))
 
 
-async def _get_peer(self: 'TelegramClient', input_peer: 'hints.EntityLike'):
+async def _get_peer(self: 'TelegramClient', input_peer: 'hints.DialogLike'):
     try:
         return utils.get_peer(input_peer)
     except TypeError:
         # Can only be self by now
-        return _tl.PeerUser(await self.get_peer_id(input_peer))
+        return _tl.PeerUser(await self._get_peer_id(input_peer))
 
 
 def get_messages(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         limit: float = (),
         *,
         offset_date: 'hints.DateLike' = None,
@@ -340,7 +342,7 @@ def get_messages(
         add_offset: int = 0,
         search: str = None,
         filter: 'typing.Union[_tl.TypeMessagesFilter, typing.Type[_tl.TypeMessagesFilter]]' = None,
-        from_user: 'hints.EntityLike' = None,
+        from_user: 'hints.DialogLike' = None,
         wait_time: float = None,
         ids: 'typing.Union[int, typing.Sequence[int]]' = None,
         reverse: bool = False,
@@ -356,7 +358,7 @@ def get_messages(
             reverse=reverse,
             wait_time=wait_time,
             limit=len(ids),
-            entity=entity,
+            entity=dialog,
             ids=ids
         )
 
@@ -365,7 +367,7 @@ def get_messages(
         reverse=reverse,
         wait_time=wait_time,
         limit=limit,
-        entity=entity,
+        entity=dialog,
         offset_id=offset_id,
         min_id=min_id,
         max_id=max_id,
@@ -381,7 +383,7 @@ def get_messages(
 
 async def _get_comment_data(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        entity: 'hints.DialogLike',
         message: 'typing.Union[int, _tl.Message]'
 ):
     r = await self(_tl.fn.messages.GetDiscussionMessage(
@@ -394,7 +396,7 @@ async def _get_comment_data(
 
 async def send_message(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         message: 'hints.MessageLike' = '',
         *,
         # - Message contents
@@ -426,7 +428,7 @@ async def send_message(
         ttl: int = None,
         # - Send options
         reply_to: 'typing.Union[int, _tl.Message]' = None,
-        send_as: 'hints.EntityLike' = None,
+        send_as: 'hints.DialogLike' = None,
         clear_draft: bool = False,
         background: bool = None,
         noforwards: bool = None,
@@ -464,7 +466,7 @@ async def send_message(
     elif not isinstance(message, InputMessage):
         raise TypeError(f'message must be either str, Message or InputMessage, but got: {message!r}')
 
-    entity = await self.get_input_entity(entity)
+    entity = await self._get_input_peer(dialog)
     if comment_to is not None:
         entity, reply_to = await _get_comment_data(self, entity, comment_to)
     elif reply_to:
@@ -476,16 +478,17 @@ async def send_message(
 
         # TODO album
         if message._file._should_upload_thumb():
-            message._file._set_uploaded_thumb(await self.upload_file(message._file._thumb))
+            message._file._set_uploaded_thumb(await self._upload_file(message._file._thumb))
 
         if message._file._should_upload_file():
-            message._file._set_uploaded_file(await self.upload_file(message._file._file))
+            message._file._set_uploaded_file(await self._upload_file(message._file._file))
 
         request = _tl.fn.messages.SendMedia(
             entity, message._file._media, reply_to_msg_id=reply_to, message=message._text,
             entities=message._fmt_entities, reply_markup=message._reply_markup, silent=message._silent,
             schedule_date=schedule, clear_draft=clear_draft,
-            background=background, noforwards=noforwards, send_as=send_as
+            background=background, noforwards=noforwards, send_as=send_as,
+            random_id=int.from_bytes(os.urandom(8), 'big', signed=True),
         )
     else:
         request = _tl.fn.messages.SendMessage(
@@ -500,7 +503,8 @@ async def send_message(
             reply_markup=_custom.button.build_reply_markup(buttons),
             schedule_date=schedule,
             noforwards=noforwards,
-            send_as=send_as
+            send_as=send_as,
+            random_id=int.from_bytes(os.urandom(8), 'big', signed=True),
         )
 
     result = await self(request)
@@ -521,9 +525,9 @@ async def send_message(
 
 async def forward_messages(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         messages: 'typing.Union[typing.Sequence[hints.MessageIDLike]]',
-        from_peer: 'hints.EntityLike' = None,
+        from_dialog: 'hints.DialogLike' = None,
         *,
         background: bool = None,
         with_my_score: bool = None,
@@ -531,17 +535,18 @@ async def forward_messages(
         as_album: bool = None,
         schedule: 'hints.DateLike' = None,
         noforwards: bool = None,
-        send_as: 'hints.EntityLike' = None
+        send_as: 'hints.DialogLike' = None
 ) -> 'typing.Sequence[_tl.Message]':
     if as_album is not None:
         warnings.warn('the as_album argument is deprecated and no longer has any effect')
 
-    entity = await self.get_input_entity(entity)
+    entity = await self._get_input_peer(dialog)
 
-    if from_peer:
-        from_peer = await self.get_input_entity(from_peer)
-        from_peer_id = await self.get_peer_id(from_peer)
+    if from_dialog:
+        from_peer = await self._get_input_peer(from_dialog)
+        from_peer_id = await self._get_peer_id(from_peer)
     else:
+        from_peer = None
         from_peer_id = None
 
     def get_key(m):
@@ -573,7 +578,8 @@ async def forward_messages(
             with_my_score=with_my_score,
             schedule_date=schedule,
             noforwards=noforwards,
-            send_as=send_as
+            send_as=send_as,
+            random_id=[int.from_bytes(os.urandom(8), 'big', signed=True) for _ in chunk],
         )
         result = await self(req)
         sent.extend(self._get_response_message(req, result, entity))
@@ -582,7 +588,7 @@ async def forward_messages(
 
 async def edit_message(
         self: 'TelegramClient',
-        entity: 'typing.Union[hints.EntityLike, _tl.Message]',
+        dialog: 'typing.Union[hints.DialogLike, _tl.Message]',
         message: 'hints.MessageLike' = None,
         text: str = None,
         *,
@@ -626,7 +632,7 @@ async def edit_message(
         else:
             return await self(request)
 
-    entity = await self.get_input_entity(entity)
+    entity = await self._get_input_peer(dialog)
     request = _tl.fn.messages.EditMessage(
         peer=entity,
         id=utils.get_message_id(message),
@@ -642,7 +648,7 @@ async def edit_message(
 
 async def delete_messages(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         messages: 'typing.Union[typing.Sequence[hints.MessageIDLike]]',
         *,
         revoke: bool = True) -> 'typing.Sequence[_tl.messages.AffectedMessages]':
@@ -652,11 +658,12 @@ async def delete_messages(
         else int(m) for m in messages
     )
 
-    if entity:
-        entity = await self.get_input_entity(entity)
+    if dialog:
+        entity = await self._get_input_peer(dialog)
         ty = helpers._entity_type(entity)
     else:
         # no entity (None), set a value that's not a channel for private delete
+        entity = None
         ty = helpers._EntityType.USER
 
     if ty == helpers._EntityType.CHANNEL:
@@ -670,10 +677,11 @@ async def delete_messages(
 
 async def mark_read(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         message: 'hints.MessageIDLike' = None,
         *,
-        clear_mentions: bool = False) -> bool:
+        clear_mentions: bool = False,
+        clear_reactions: bool = False) -> bool:
     if not message:
         max_id = 0
     elif isinstance(message, int):
@@ -681,9 +689,12 @@ async def mark_read(
     else:
         max_id = message.id
 
-    entity = await self.get_input_entity(entity)
+    entity = await self._get_input_peer(dialog)
     if clear_mentions:
         await self(_tl.fn.messages.ReadMentions(entity))
+
+    if clear_reactions:
+        await self(_tl.fn.messages.ReadReactions(entity))
 
     if helpers._entity_type(entity) == helpers._EntityType.CHANNEL:
         return await self(_tl.fn.channels.ReadHistory(
@@ -696,26 +707,26 @@ async def mark_read(
 
 async def pin_message(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         message: 'typing.Optional[hints.MessageIDLike]',
         *,
         notify: bool = False,
         pm_oneside: bool = False
 ):
-    return await _pin(self, entity, message, unpin=False, notify=notify, pm_oneside=pm_oneside)
+    return await _pin(self, dialog, message, unpin=False, notify=notify, pm_oneside=pm_oneside)
 
 async def unpin_message(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         message: 'typing.Optional[hints.MessageIDLike]' = None,
         *,
         notify: bool = False
 ):
-    return await _pin(self, entity, message, unpin=True, notify=notify)
+    return await _pin(self, dialog, message, unpin=True, notify=notify)
 
 async def _pin(self, entity, message, *, unpin, notify=False, pm_oneside=False):
     message = utils.get_message_id(message) or 0
-    entity = await self.get_input_entity(entity)
+    entity = await self._get_input_peer(entity)
     if message <= 0:  # old behaviour accepted negative IDs to unpin
         await self(_tl.fn.messages.UnpinAllMessages(entity))
         return
@@ -738,3 +749,44 @@ async def _pin(self, entity, message, *, unpin, notify=False, pm_oneside=False):
 
     # Pinning a message that doesn't exist would RPC-error earlier
     return self._get_response_message(request, result, entity)
+
+async def send_reaction(
+    self: 'TelegramClient',
+    entity: 'hints.DialogLike',
+    message: 'hints.MessageIDLike',
+    reaction: typing.Optional[str] = None,
+    big: bool = False
+):
+    message = utils.get_message_id(message) or 0
+    if not reaction:
+        get_default_request = _tl.fn.help.GetAppConfig()
+        app_config = await self(get_default_request)
+        reaction = (
+            next(
+                (
+                    y for y in app_config.value
+                    if "reactions_default" in y.key
+                )
+            )
+        ).value.value
+    request = _tl.fn.messages.SendReaction(
+        big=big,
+        peer=entity,
+        msg_id=message,
+        reaction=reaction
+    )
+    result = await self(request)
+    for update in result.updates:
+        if isinstance(update, _tl.UpdateMessageReactions):
+            return update.reactions
+        if isinstance(update, _tl.UpdateEditMessage):
+            return update.message.reactions
+
+async def set_quick_reaction(
+    self: 'TelegramClient',
+    reaction: str
+):
+    request = _tl.fn.messages.SetDefaultReaction(
+        reaction=reaction
+    )
+    return await self(request)

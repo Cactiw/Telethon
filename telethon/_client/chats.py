@@ -3,6 +3,7 @@ import inspect
 import itertools
 import string
 import typing
+import dataclasses
 
 from .. import errors, _tl
 from .._misc import helpers, utils, requestiter, tlobject, enums, hints
@@ -19,11 +20,9 @@ _MAX_PROFILE_PHOTO_CHUNK_SIZE = 100
 class _ChatAction:
     def __init__(self, client, chat, action, *, delay, auto_cancel):
         self._client = client
-        self._chat = chat
-        self._action = action
         self._delay = delay
         self._auto_cancel = auto_cancel
-        self._request = None
+        self._request = _tl.fn.messages.SetTyping(chat, action)
         self._task = None
         self._running = False
 
@@ -31,14 +30,7 @@ class _ChatAction:
         return self._once().__await__()
 
     async def __aenter__(self):
-        self._chat = await self._client.get_input_entity(self._chat)
-
-        # Since `self._action` is passed by reference we can avoid
-        # recreating the request all the time and still modify
-        # `self._action.progress` directly in `progress`.
-        self._request = _tl.fn.messages.SetTyping(
-            self._chat, self._action)
-
+        self._request = dataclasses.replace(self._request, peer=await self._client._get_input_peer(self._request.peer))
         self._running = True
         self._task = asyncio.create_task(self._update())
         return self
@@ -55,7 +47,7 @@ class _ChatAction:
             self._task = None
 
     async def _once(self):
-        self._chat = await self._client.get_input_entity(self._chat)
+        self._request = dataclasses.replace(self._request, peer=await self._client._get_input_peer(self._request.peer))
         await self._client(_tl.fn.messages.SetTyping(self._chat, self._action))
 
     async def _update(self):
@@ -93,8 +85,11 @@ class _ChatAction:
         }[enums.Action(action)]
 
     def progress(self, current, total):
-        if hasattr(self._action, 'progress'):
-            self._action.progress = 100 * round(current / total)
+        if hasattr(self._request.action, 'progress'):
+            self._request = dataclasses.replace(
+                self._request,
+                action=dataclasses.replace(self._request.action, progress=100 * round(current / total))
+            )
 
 
 class _ParticipantsIter(requestiter.RequestIter):
@@ -119,7 +114,7 @@ class _ParticipantsIter(requestiter.RequestIter):
             else:
                 raise RuntimeError('unhandled enum variant')
 
-        entity = await self.client.get_input_entity(entity)
+        entity = await self.client._get_input_peer(entity)
         ty = helpers._entity_type(entity)
         if search and (filter or ty != helpers._EntityType.CHANNEL):
             # We need to 'search' ourselves unless we have a PeerChannel
@@ -177,7 +172,7 @@ class _ParticipantsIter(requestiter.RequestIter):
         else:
             self.total = 1
             if self.limit != 0:
-                user = await self.client.get_entity(entity)
+                user = await self.client.get_profile(entity)
                 if self.filter_entity(user):
                     self.buffer.append(user)
 
@@ -190,8 +185,8 @@ class _ParticipantsIter(requestiter.RequestIter):
         # Most people won't care about getting exactly 12,345
         # members so it doesn't really matter not to be 100%
         # precise with being out of the offset/limit here.
-        self.request.limit = min(
-            self.limit - self.request.offset, _MAX_PARTICIPANTS_CHUNK_SIZE)
+        self.request = dataclasses.replace(self.request, limit=min(
+            self.limit - self.request.offset, _MAX_PARTICIPANTS_CHUNK_SIZE))
 
         if self.request.offset > self.limit:
             return True
@@ -199,7 +194,7 @@ class _ParticipantsIter(requestiter.RequestIter):
         participants = await self.client(self.request)
         self.total = participants.count
 
-        self.request.offset += len(participants.participants)
+        self.request = dataclasses.replace(self.request, offset=self.request.offset + len(participants.participants))
         users = {user.id: user for user in participants.users}
         for participant in participants.participants:
             if isinstance(participant, _tl.ChannelParticipantBanned):
@@ -209,6 +204,10 @@ class _ParticipantsIter(requestiter.RequestIter):
                 user_id = participant.peer.user_id
             else:
                 user_id = participant.user_id
+
+            if isinstance(participant, types.ChannelParticipantLeft):
+                # These participants should be ignored. See #3231.
+                continue
 
             user = users[user_id]
             if not self.filter_entity(user) or user.id in self.seen:
@@ -237,7 +236,7 @@ class _AdminLogIter(requestiter.RequestIter):
         else:
             events_filter = None
 
-        self.entity = await self.client.get_input_entity(entity)
+        self.entity = await self.client._get_input_peer(entity)
 
         admin_list = []
         if admins:
@@ -245,7 +244,7 @@ class _AdminLogIter(requestiter.RequestIter):
                 admins = (admins,)
 
             for admin in admins:
-                admin_list.append(await self.client.get_input_entity(admin))
+                admin_list.append(await self.client._get_input_peer(admin))
 
         self.request = _tl.fn.channels.GetAdminLog(
             self.entity, q=search or '', min_id=min_id, max_id=max_id,
@@ -253,20 +252,20 @@ class _AdminLogIter(requestiter.RequestIter):
         )
 
     async def _load_next_chunk(self):
-        self.request.limit = min(self.left, _MAX_ADMIN_LOG_CHUNK_SIZE)
+        self.request = dataclasses.replace(self.request, limit=min(self.left, _MAX_ADMIN_LOG_CHUNK_SIZE))
         r = await self.client(self.request)
         entities = {utils.get_peer_id(x): x
                     for x in itertools.chain(r.users, r.chats)}
 
-        self.request.max_id = min((e.id for e in r.events), default=0)
+        self.request = dataclasses.replace(self.request, max_id=min((e.id for e in r.events), default=0))
         for ev in r.events:
             if isinstance(ev.action,
                           _tl.ChannelAdminLogEventActionEditMessage):
-                ev.action.prev_message = _custom.Message._new(
-                    self.client, ev.action.prev_message, entities, self.entity)
-
-                ev.action.new_message = _custom.Message._new(
-                    self.client, ev.action.new_message, entities, self.entity)
+                ev = dataclasses.replace(ev, action=dataclasses.replace(
+                    ev.action,
+                    prev_message=_custom.Message._new(self.client, ev.action.prev_message, entities, self.entity),
+                    new_message=_custom.Message._new(self.client, ev.action.new_message, entities, self.entity)
+                ))
 
             elif isinstance(ev.action,
                             _tl.ChannelAdminLogEventActionDeleteMessage):
@@ -283,7 +282,7 @@ class _ProfilePhotoIter(requestiter.RequestIter):
     async def _init(
             self, entity, offset, max_id
     ):
-        entity = await self.client.get_input_entity(entity)
+        entity = await self.client._get_input_peer(entity)
         ty = helpers._entity_type(entity)
         if ty == helpers._EntityType.USER:
             self.request = _tl.fn.photos.GetUserPhotos(
@@ -308,7 +307,7 @@ class _ProfilePhotoIter(requestiter.RequestIter):
             )
 
         if self.limit == 0:
-            self.request.limit = 1
+            self.request = dataclasses.replace(self.request, limit=1)
             result = await self.client(self.request)
             if isinstance(result, _tl.photos.Photos):
                 self.total = len(result.photos)
@@ -319,7 +318,7 @@ class _ProfilePhotoIter(requestiter.RequestIter):
                 self.total = getattr(result, 'count', None)
 
     async def _load_next_chunk(self):
-        self.request.limit = min(self.left, _MAX_PROFILE_PHOTO_CHUNK_SIZE)
+        self.request = dataclasses.replace(self.request, limit=min(self.left, _MAX_PROFILE_PHOTO_CHUNK_SIZE))
         result = await self.client(self.request)
 
         if isinstance(result, _tl.photos.Photos):
@@ -338,7 +337,7 @@ class _ProfilePhotoIter(requestiter.RequestIter):
             if len(self.buffer) < self.request.limit:
                 self.left = len(self.buffer)
             else:
-                self.request.offset += len(result.photos)
+                self.request = dataclasses.replace(self.request, offset=self.request.offset + len(result.photos))
         else:
             # Some broadcast channels have a photo that this request doesn't
             # retrieve for whatever random reason the Telegram server feels.
@@ -368,13 +367,16 @@ class _ProfilePhotoIter(requestiter.RequestIter):
             if len(result.messages) < self.request.limit:
                 self.left = len(self.buffer)
             elif result.messages:
-                self.request.add_offset = 0
-                self.request.offset_id = result.messages[-1].id
+                self.request = dataclasses.replace(
+                    self.request,
+                    add_offset=0,
+                    offset_id=result.messages[-1].id
+                )
 
 
 def get_participants(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        chat: 'hints.DialogLike',
         limit: float = (),
         *,
         search: str = '',
@@ -382,7 +384,7 @@ def get_participants(
     return _ParticipantsIter(
         self,
         limit,
-        entity=entity,
+        entity=chat,
         filter=filter,
         search=search
     )
@@ -390,13 +392,13 @@ def get_participants(
 
 def get_admin_log(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        chat: 'hints.DialogLike',
         limit: float = (),
         *,
         max_id: int = 0,
         min_id: int = 0,
         search: str = None,
-        admins: 'hints.EntitiesLike' = None,
+        admins: 'hints.DialogsLike' = None,
         join: bool = None,
         leave: bool = None,
         invite: bool = None,
@@ -415,7 +417,7 @@ def get_admin_log(
     return _AdminLogIter(
         self,
         limit,
-        entity=entity,
+        entity=chat,
         admins=admins,
         search=search,
         min_id=min_id,
@@ -440,7 +442,7 @@ def get_admin_log(
 
 def get_profile_photos(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        profile: 'hints.DialogLike',
         limit: int = (),
         *,
         offset: int = 0,
@@ -448,7 +450,7 @@ def get_profile_photos(
     return _ProfilePhotoIter(
         self,
         limit,
-        entity=entity,
+        entity=profile,
         offset=offset,
         max_id=max_id
     )
@@ -456,7 +458,7 @@ def get_profile_photos(
 
 def action(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         action: 'typing.Union[str, _tl.TypeSendMessageAction]',
         *,
         delay: float = 4,
@@ -464,12 +466,12 @@ def action(
     action = _ChatAction._parse(action)
 
     return _ChatAction(
-        self, entity, action, delay=delay, auto_cancel=auto_cancel)
+        self, dialog, action, delay=delay, auto_cancel=auto_cancel)
 
 async def edit_admin(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
-        user: 'hints.EntityLike',
+        chat: 'hints.DialogLike',
+        user: 'hints.DialogLike',
         *,
         change_info: bool = None,
         post_messages: bool = None,
@@ -483,11 +485,9 @@ async def edit_admin(
         anonymous: bool = None,
         is_admin: bool = None,
         title: str = None) -> _tl.Updates:
-    entity = await self.get_input_entity(entity)
-    user = await self.get_input_entity(user)
+    entity = await self._get_input_peer(chat)
+    user = await self._get_input_peer(user)
     ty = helpers._entity_type(user)
-    if ty != helpers._EntityType.USER:
-        raise ValueError('You must pass a user entity')
 
     perm_names = (
         'change_info', 'post_messages', 'edit_messages', 'delete_messages',
@@ -503,7 +503,7 @@ async def edit_admin(
         if post_messages or edit_messages:
             # TODO get rid of this once sessions cache this information
             if entity.channel_id not in self._megagroup_cache:
-                full_entity = await self.get_entity(entity)
+                full_entity = await self.get_profile(entity)
                 self._megagroup_cache[entity.channel_id] = full_entity.megagroup
 
             if self._megagroup_cache[entity.channel_id]:
@@ -533,8 +533,8 @@ async def edit_admin(
 
 async def edit_permissions(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
-        user: 'typing.Optional[hints.EntityLike]' = None,
+        chat: 'hints.DialogLike',
+        user: 'typing.Optional[hints.DialogLike]' = None,
         until_date: 'hints.DateLike' = None,
         *,
         view_messages: bool = True,
@@ -549,10 +549,8 @@ async def edit_permissions(
         change_info: bool = True,
         invite_users: bool = True,
         pin_messages: bool = True) -> _tl.Updates:
-    entity = await self.get_input_entity(entity)
+    entity = await self._get_input_peer(chat)
     ty = helpers._entity_type(entity)
-    if ty != helpers._EntityType.CHANNEL:
-        raise ValueError('You must pass either a channel or a supergroup')
 
     rights = _tl.ChatBannedRights(
         until_date=until_date,
@@ -576,10 +574,7 @@ async def edit_permissions(
             banned_rights=rights
         ))
 
-    user = await self.get_input_entity(user)
-    ty = helpers._entity_type(user)
-    if ty != helpers._EntityType.USER:
-        raise ValueError('You must pass a user entity')
+    user = await self._get_input_peer(user)
 
     if isinstance(user, _tl.InputPeerSelf):
         raise ValueError('You cannot restrict yourself')
@@ -592,13 +587,11 @@ async def edit_permissions(
 
 async def kick_participant(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
-        user: 'typing.Optional[hints.EntityLike]'
+        chat: 'hints.DialogLike',
+        user: 'typing.Optional[hints.DialogLike]'
 ):
-    entity = await self.get_input_entity(entity)
-    user = await self.get_input_entity(user)
-    if helpers._entity_type(user) != helpers._EntityType.USER:
-        raise ValueError('You must pass a user entity')
+    entity = await self._get_input_peer(chat)
+    user = await self._get_input_peer(user)
 
     ty = helpers._entity_type(entity)
     if ty == helpers._EntityType.CHAT:
@@ -628,19 +621,18 @@ async def kick_participant(
 
 async def get_permissions(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
-        user: 'hints.EntityLike' = None
-) -> 'typing.Optional[custom.ParticipantPermissions]':
-    entity = await self.get_entity(entity)
+        chat: 'hints.DialogLike',
+        user: 'hints.DialogLike' = None
+) -> 'typing.Optional[_custom.ParticipantPermissions]':
+    entity = await self.get_profile(chat)
 
     if not user:
         if helpers._entity_type(entity) != helpers._EntityType.USER:
             return entity.default_banned_rights
 
-    entity = await self.get_input_entity(entity)
-    user = await self.get_input_entity(user)
-    if helpers._entity_type(user) != helpers._EntityType.USER:
-        raise ValueError('You must pass a user entity')
+    entity = await self._get_input_peer(entity)
+    user = await self._get_input_peer(user)
+
     if helpers._entity_type(entity) == helpers._EntityType.CHANNEL:
         participant = await self(_tl.fn.channels.GetParticipant(
             entity,
@@ -652,7 +644,7 @@ async def get_permissions(
             entity
         ))
         if isinstance(user, _tl.InputPeerSelf):
-            user = await self.get_me(input_peer=True)
+            user = _tl.PeerUser(self._session_state.user_id)
         for participant in chat.full_chat.participants.participants:
             if participant.user_id == user.user_id:
                 return _custom.ParticipantPermissions(participant, True)
@@ -662,12 +654,10 @@ async def get_permissions(
 
 async def get_stats(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        chat: 'hints.DialogLike',
         message: 'typing.Union[int, _tl.Message]' = None,
 ):
-    entity = await self.get_input_entity(entity)
-    if helpers._entity_type(entity) != helpers._EntityType.CHANNEL:
-        raise TypeError('You must pass a channel entity')
+    entity = await self._get_input_peer(chat)
 
     message = utils.get_message_id(message)
     if message is not None:

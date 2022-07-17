@@ -17,6 +17,8 @@ While there are entries for which their difference must be fetched,
 to get the difference.
 """
 import asyncio
+import datetime
+import time
 from dataclasses import dataclass, field
 from .._sessions.types import SessionState, ChannelState
 from .. import _tl
@@ -117,7 +119,7 @@ class MessageBox:
     map: dict = field(default_factory=dict)  # entry -> state
 
     # Additional fields beyond PTS needed by `ENTRY_ACCOUNT`.
-    date: int = 1
+    date: datetime.datetime = datetime.datetime(*time.gmtime(0)[:6]).replace(tzinfo=datetime.timezone.utc)
     seq: int = NO_SEQ
 
     # Holds the entry with the closest deadline (optimization to avoid recalculating the minimum deadline).
@@ -154,7 +156,7 @@ class MessageBox:
             self.map[ENTRY_SECRET] = State(pts=session_state.qts, deadline=deadline)
         self.map.update((s.channel_id, State(pts=s.pts, deadline=deadline)) for s in channel_states)
 
-        self.date = session_state.date
+        self.date = datetime.datetime.fromtimestamp(session_state.date).replace(tzinfo=datetime.timezone.utc)
         self.seq = session_state.seq
         self.next_deadline = ENTRY_ACCOUNT
 
@@ -167,7 +169,7 @@ class MessageBox:
         return dict(
             pts=self.map[ENTRY_ACCOUNT].pts if ENTRY_ACCOUNT in self.map else NO_SEQ,
             qts=self.map[ENTRY_SECRET].pts if ENTRY_SECRET in self.map else NO_SEQ,
-            date=self.date,
+            date=int(self.date.timestamp()),
             seq=self.seq,
         ), {id: state.pts for id, state in self.map.items() if isinstance(id, int)}
 
@@ -316,8 +318,8 @@ class MessageBox:
 
         seq = getattr(updates, 'seq', None) or NO_SEQ
         seq_start = getattr(updates, 'seq_start', None) or seq
-        users = getattr(updates, 'users') or []
-        chats = getattr(updates, 'chats') or []
+        users = getattr(updates, 'users', None) or []
+        chats = getattr(updates, 'chats', None) or []
         updates = getattr(updates, 'updates', None) or [updates]
 
         # > For all the other [not `updates` or `updatesCombined`] `Updates` type constructors
@@ -528,7 +530,7 @@ class MessageBox:
 
         return _tl.fn.updates.GetChannelDifference(
             force=False,
-            channel=packed.try_to_input_channel(),
+            channel=_tl.InputChannel(packed.id, packed.hash),
             filter=_tl.ChannelMessagesFilterEmpty(),
             pts=state.pts,
             limit=BOT_CHANNEL_DIFF_LIMIT if chat_hashes.self_bot else USER_CHANNEL_DIFF_LIMIT

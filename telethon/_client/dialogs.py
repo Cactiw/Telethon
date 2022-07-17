@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import itertools
 import typing
+import dataclasses
 
 from .. import errors, _tl
 from .._misc import helpers, utils, requestiter, hints
@@ -49,7 +50,7 @@ class _DialogsIter(requestiter.RequestIter):
         self.ignore_migrated = ignore_migrated
 
     async def _load_next_chunk(self):
-        self.request.limit = min(self.left, _MAX_CHUNK_SIZE)
+        self.request = dataclasses.replace(self.request, limit=min(self.left, _MAX_CHUNK_SIZE))
         r = await self.client(self.request)
 
         self.total = getattr(r, 'count', len(r.dialogs))
@@ -103,10 +104,13 @@ class _DialogsIter(requestiter.RequestIter):
             for d in reversed(r.dialogs)
         )), None)
 
-        self.request.exclude_pinned = True
-        self.request.offset_id = last_message.id if last_message else 0
-        self.request.offset_date = last_message.date if last_message else None
-        self.request.offset_peer = self.buffer[-1].input_entity
+        self.request = dataclasses.replace(
+            self.request,
+            exclude_pinned=True,
+            offset_id=last_message.id if last_message else 0,
+            offset_date=last_message.date if last_message else None,
+            offset_peer=self.buffer[-1].input_entity,
+        )
 
 
 class _DraftsIter(requestiter.RequestIter):
@@ -118,7 +122,7 @@ class _DraftsIter(requestiter.RequestIter):
             peers = []
             for entity in entities:
                 peers.append(_tl.InputDialogPeer(
-                    await self.client.get_input_entity(entity)))
+                    await self.client._get_input_peer(entity)))
 
             r = await self.client(_tl.fn.messages.GetPeerDialogs(peers))
             items = r.dialogs
@@ -142,15 +146,11 @@ def get_dialogs(
         *,
         offset_date: 'hints.DateLike' = None,
         offset_id: int = 0,
-        offset_peer: 'hints.EntityLike' = _tl.InputPeerEmpty(),
+        offset_peer: 'hints.DialogLike' = _tl.InputPeerEmpty(),
         ignore_pinned: bool = False,
         ignore_migrated: bool = False,
         folder: int = None,
-        archived: bool = None
 ) -> _DialogsIter:
-    if archived is not None:
-        folder = 1 if archived else 0
-
     return _DialogsIter(
         self,
         limit,
@@ -165,53 +165,20 @@ def get_dialogs(
 
 def get_drafts(
         self: 'TelegramClient',
-        entity: 'hints.EntitiesLike' = None
+        dialog: 'hints.DialogsLike' = None
 ) -> _DraftsIter:
     limit = None
-    if entity:
-        if not utils.is_list_like(entity):
-            entity = (entity,)
-        limit = len(entity)
+    if dialog:
+        if not utils.is_list_like(dialog):
+            dialog = (dialog,)
+        limit = len(dialog)
 
-    return _DraftsIter(self, limit, entities=entity)
+    return _DraftsIter(self, limit, entities=dialog)
 
-
-async def edit_folder(
-        self: 'TelegramClient',
-        entity: 'hints.EntitiesLike' = None,
-        folder: typing.Union[int, typing.Sequence[int]] = None,
-        *,
-        unpack=None
-) -> _tl.Updates:
-    if (entity is None) == (unpack is None):
-        raise ValueError('You can only set either entities or unpack, not both')
-
-    if unpack is not None:
-        return await self(_tl.fn.folders.DeleteFolder(
-            folder_id=unpack
-        ))
-
-    if not utils.is_list_like(entity):
-        entities = [await self.get_input_entity(entity)]
-    else:
-        entities = await asyncio.gather(
-            *(self.get_input_entity(x) for x in entity))
-
-    if folder is None:
-        raise ValueError('You must specify a folder')
-    elif not utils.is_list_like(folder):
-        folder = [folder] * len(entities)
-    elif len(entities) != len(folder):
-        raise ValueError('Number of folders does not match number of entities')
-
-    return await self(_tl.fn.folders.EditPeerFolders([
-        _tl.InputFolderPeer(x, folder_id=y)
-        for x, y in zip(entities, folder)
-    ]))
 
 async def delete_dialog(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        dialog: 'hints.DialogLike',
         *,
         revoke: bool = False
 ):
@@ -222,7 +189,7 @@ async def delete_dialog(
     else:
         deactivated = False
 
-    entity = await self.get_input_entity(entity)
+    entity = await self._get_input_peer(dialog)
     ty = helpers._entity_type(entity)
     if ty == helpers._EntityType.CHANNEL:
         return await self(_tl.fn.channels.LeaveChannel(entity))

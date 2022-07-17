@@ -578,20 +578,6 @@ def get_input_group_call(call):
         _raise_cast_fail(call, 'InputGroupCall')
 
 
-def _get_entity_pair(entity_id, entities,
-                     get_input_peer=get_input_peer):
-    """
-    Returns ``(entity, input_entity)`` for the given entity ID.
-    """
-    entity = entities.get(entity_id)
-    try:
-        input_entity = get_input_peer(entity)
-    except TypeError:
-        input_entity = None
-
-    return entity, input_entity
-
-
 def get_message_id(message):
     """Similar to :meth:`get_input_peer`, but for message IDs."""
     if message is None:
@@ -748,37 +734,26 @@ def get_attributes(file, *, attributes=None, mime_type=None,
     return list(attr_dict.values()), mime_type
 
 
-def sanitize_parse_mode(mode):
-    """
-    Converts the given parse mode into an object with
-    ``parse`` and ``unparse`` callable properties.
-    """
-    if not mode:
-        return None
-
-    if callable(mode):
-        class CustomMode:
-            @staticmethod
-            def unparse(text, entities):
-                raise NotImplementedError
-
-        CustomMode.parse = mode
-        return CustomMode
-    elif (all(hasattr(mode, x) for x in ('parse', 'unparse'))
-          and all(callable(x) for x in (mode.parse, mode.unparse))):
-        return mode
+def sanitize_parse_mode(mode, *, _nop_parse=lambda t: (t, []), _nop_unparse=lambda t, e: t):
+    if mode is None:
+        mode = (_nop_parse, _nop_unparse)
     elif isinstance(mode, str):
-        try:
-            return {
-                'md': markdown,
-                'markdown': markdown,
-                'htm': html,
-                'html': html
-            }[mode.lower()]
-        except KeyError:
-            raise ValueError('Unknown parse mode {}'.format(mode))
+        mode = mode.lower()
+        if mode in ('md', 'markdown'):
+            mode = (markdown.parse, markdown.unparse)
+        elif mode in ('htm', 'html'):
+            mode = (html.parse, html.unparse)
+        else:
+            raise ValueError(f'mode must be one of md, markdown, htm or html, but was {mode!r}')
+    elif callable(mode):
+        mode = (mode, _nop_unparse)
+    elif isinstance(mode, tuple):
+        if not (len(mode) == 2 and callable(mode[0]) and callable(mode[1])):
+            raise ValueError(f'mode must be a tuple of exactly two callables')
     else:
-        raise TypeError('Invalid parse mode type {}'.format(mode))
+        raise TypeError(f'mode must be either a str, callable or tuple, but was {mode!r}')
+
+    return mode
 
 
 def get_input_location(location):
@@ -988,27 +963,13 @@ def get_peer(peer):
 
 def get_peer_id(peer):
     """
-    Extract the integer ID from the given peer.
+    Extract the integer ID from the given :tl:`Peer`.
     """
-    # First we assert it's a Peer TLObject, or early return for integers
-    if isinstance(peer, int):
-        return peer
-
-    # Tell the user to use their client to resolve InputPeerSelf if we got one
-    if isinstance(peer, _tl.InputPeerSelf):
-        _raise_cast_fail(peer, 'int (you might want to use client.get_peer_id)')
-
-    try:
-        peer = get_peer(peer)
-    except TypeError:
+    pid = getattr(peer, 'user_id', None) or getattr(peer, 'channel_id', None) or getattr(peer, 'chat_id', None)
+    if not isinstance(pid, int):
         _raise_cast_fail(peer, 'int')
 
-    if isinstance(peer, _tl.PeerUser):
-        return peer.user_id
-    elif isinstance(peer, _tl.PeerChat):
-        return peer.chat_id
-    else:  # if isinstance(peer, _tl.PeerChannel):
-        return peer.channel_id
+    return pid
 
 
 def _rle_decode(data):

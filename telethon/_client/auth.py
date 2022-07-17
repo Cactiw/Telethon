@@ -1,3 +1,4 @@
+import asyncio
 import getpass
 import inspect
 import os
@@ -5,6 +6,7 @@ import sys
 import typing
 import warnings
 import functools
+import time
 import dataclasses
 
 from .._misc import utils, helpers, password as pwd_mod
@@ -71,7 +73,7 @@ def start(
 async def _start(
         self: 'TelegramClient', phone, password, bot_token,
         code_callback, first_name, last_name, max_attempts):
-    if not self.is_connected():
+    if not self.is_connected:
         await self.connect()
 
     # Rather than using `is_user_authorized`, use `get_me`. While this is
@@ -196,75 +198,60 @@ async def _start(
 
     return self
 
-def _parse_phone_and_hash(self, phone, phone_hash):
-    """
-    Helper method to both parse and validate phone and its hash.
-    """
-    phone = utils.parse_phone(phone) or self._phone
-    if not phone:
-        raise ValueError(
-            'Please make sure to call send_code_request first.'
-        )
-
-    phone_hash = phone_hash or self._phone_code_hash.get(phone, None)
-    if not phone_hash:
-        raise ValueError('You also need to provide a phone_code_hash.')
-
-    return phone, phone_hash
 
 async def sign_in(
         self: 'TelegramClient',
-        phone: str = None,
-        code: typing.Union[str, int] = None,
         *,
+        code: typing.Union[str, int] = None,
         password: str = None,
-        bot_token: str = None,
-        phone_code_hash: str = None) -> 'typing.Union[_tl.User, _tl.auth.SentCode]':
-    me = await self.get_me()
-    if me:
-        return me
+        bot_token: str = None,) -> 'typing.Union[_tl.User, _tl.auth.SentCode]':
+    if code and bot_token:
+        raise ValueError('Can only provide one of code or bot_token, not both')
 
-    if phone and code:
-        phone, phone_code_hash = \
-            _parse_phone_and_hash(self, phone, phone_code_hash)
+    if not code and not bot_token and not password:
+        raise ValueError('You must provide code, password, or bot_token.')
+
+    if code:
+        if not self._phone_code_hash:
+            raise ValueError('Must call client.send_code_request before sign in')
 
         # May raise PhoneCodeEmptyError, PhoneCodeExpiredError,
         # PhoneCodeHashEmptyError or PhoneCodeInvalidError.
-        request = _tl.fn.auth.SignIn(
-            phone, phone_code_hash, str(code)
-        )
-    elif password:
-        pwd = await self(_tl.fn.account.GetPassword())
-        request = _tl.fn.auth.CheckPassword(
-            pwd_mod.compute_check(pwd, password)
-        )
+        try:
+            result = await self(_tl.fn.auth.SignIn(*self._phone_code_hash, str(code)))
+            password = None  # user provided a password but it was not needed
+        except errors.SessionPasswordNeededError:
+            if not password:
+                raise
     elif bot_token:
-        request = _tl.fn.auth.ImportBotAuthorization(
+        result = await self(_tl.fn.auth.ImportBotAuthorization(
             flags=0, bot_auth_token=bot_token,
             api_id=self._api_id, api_hash=self._api_hash
-        )
-    else:
-        raise ValueError('You must provide either phone and code, password, or bot_token.')
+        ))
 
-    result = await self(request)
+    if password:
+        pwd = await self(_tl.fn.account.GetPassword())
+        result = await self(_tl.fn.auth.CheckPassword(
+            pwd_mod.compute_check(pwd, password)
+        ))
+
     if isinstance(result, _tl.auth.AuthorizationSignUpRequired):
-        # Emulate pre-layer 104 behaviour
-        self._tos = result.terms_of_service
-        raise errors.PhoneNumberUnoccupiedError(request=request)
+        # The method must return the User but we don't have it, so raise instead (matches pre-layer 104 behaviour)
+        self._tos = (result.terms_of_service, None)
+        raise errors.SignUpRequired()
 
     return await _update_session_state(self, result.user)
 
+
 async def sign_up(
         self: 'TelegramClient',
-        code: typing.Union[str, int],
         first_name: str,
         last_name: str = '',
         *,
-        phone: str = None,
-        phone_code_hash: str = None) -> '_tl.User':
-    me = await self.get_me()
-    if me:
-        return me
+        code: typing.Union[str, int]) -> '_tl.User':
+    if not self._phone_code_hash:
+        # This check is also present in sign_in but we do it here to customize the error message
+        raise ValueError('Must call client.send_code_request before sign up')
 
     # To prevent abuse, one has to try to sign in before signing up. This
     # is the current way in which Telegram validates the code to sign up.
@@ -273,26 +260,10 @@ async def sign_up(
     # because the user already tried to sign in.
     #
     # We're emulating pre-layer 104 behaviour so except the right error:
-    if not self._tos:
-        try:
-            return await self.sign_in(
-                phone=phone,
-                code=code,
-                phone_code_hash=phone_code_hash,
-            )
-        except errors.PhoneNumberUnoccupiedError:
-            pass  # code is correct and was used, now need to sign in
-
-    if self._tos and self._tos.text:
-        if self.parse_mode:
-            t = self.parse_mode.unparse(self._tos.text, self._tos.entities)
-        else:
-            t = self._tos.text
-        sys.stderr.write("{}\n".format(t))
-        sys.stderr.flush()
-
-    phone, phone_code_hash = \
-        _parse_phone_and_hash(self, phone, phone_code_hash)
+    try:
+        return await self.sign_in(code=code)
+    except errors.SignUpRequired:
+        pass  # code is correct and was used, now need to sign in
 
     result = await self(_tl.fn.auth.SignUp(
         phone_number=phone,
@@ -301,11 +272,21 @@ async def sign_up(
         last_name=last_name
     ))
 
-    if self._tos:
-        await self(
-            _tl.fn.help.AcceptTermsOfService(self._tos.id))
-
     return await _update_session_state(self, result.user)
+
+
+async def get_tos(self):
+    first_time = self._tos is None
+    no_tos = self._tos and self._tos[0] is None
+    tos_expired = self._tos and self._tos[1] is not None and asyncio.get_running_loop().time() >= self._tos[1]
+
+    if first_time or no_tos or tos_expired:
+        result = await self(_tl.fn.help.GetTermsOfServiceUpdate())
+        tos = getattr(result, 'terms_of_service', None)
+        self._tos = (tos, asyncio.get_running_loop().time() + result.expires.timestamp() - time.time())
+
+    # not stored in the client to prevent a cycle
+    return _custom.TermsOfService._new(self, *self._tos)
 
 
 async def _update_session_state(self, user, save=True):
@@ -325,7 +306,8 @@ async def _update_session_state(self, user, save=True):
         seq=state.seq,
     )
 
-    return user
+    self._phone_code_hash = None
+    return _custom.User._new(self, user)
 
 
 async def _replace_session_state(self, *, save=True, **changes):
@@ -339,16 +321,11 @@ async def _replace_session_state(self, *, save=True, **changes):
 
 async def send_code_request(
         self: 'TelegramClient',
-        phone: str) -> '_tl.auth.SentCode':
-    result = None
-    phone = utils.parse_phone(phone) or self._phone
-    phone_hash = self._phone_code_hash.get(phone)
+        phone: str) -> 'SentCode':
+    phone = utils.parse_phone(phone)
 
-    if phone_hash:
-        result = await self(
-            _tl.fn.auth.ResendCode(phone, phone_hash))
-
-        self._phone_code_hash[phone] = result.phone_code_hash
+    if self._phone_code_hash and phone == self._phone_code_hash[0]:
+        result = await self(_tl.fn.auth.ResendCode(*self._phone_code_hash))
     else:
         try:
             result = await self(_tl.fn.auth.SendCode(
@@ -357,22 +334,22 @@ async def send_code_request(
             return await self.send_code_request(phone)
 
         # phone_code_hash may be empty, if it is, do not save it (#1283)
-        if result.phone_code_hash:
-            self._phone_code_hash[phone] = phone_hash = result.phone_code_hash
+        if not result.phone_code_hash:
+            # The hash is required to login, so this pretty much means send code failed
+            raise ValueError('Failed to send code')
 
-    self._phone = phone
+    self._phone_code_hash = (phone, result.phone_code_hash)
+    return _custom.SentCode._new(result)
 
-    return result
 
-async def qr_login(self: 'TelegramClient', ignored_ids: typing.List[int] = None) -> _custom.QRLogin:
-    qr_login = _custom.QRLogin(self, ignored_ids or [])
-    await qr_login.recreate()
-    return qr_login
+def qr_login(self: 'TelegramClient', ignored_ids: typing.List[int] = None) -> _custom.QrLogin:
+    return _custom.QrLoginManager(self, ignored_ids)
+
 
 async def log_out(self: 'TelegramClient') -> bool:
     try:
         await self(_tl.fn.auth.LogOut())
-    except errors.RPCError:
+    except errors.RpcError:
         return False
 
     await self.disconnect()

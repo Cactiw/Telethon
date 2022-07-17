@@ -48,7 +48,7 @@ class StringSession(MemorySession):
                 takeout_id=0
             )
             if ip_len == 4:
-                ipv4 = int.from_bytes(ip, 'big', False)
+                ipv4 = int.from_bytes(ip, 'big',  signed=False)
                 ipv6 = None
             else:
                 ipv4 = None
@@ -74,15 +74,15 @@ class StringSession(MemorySession):
         if not self.state:
             return ''
 
-        if self.state.ipv6 is not None:
-            ip = self.state.ipv6.to_bytes(16, 'big', signed=False)
+        if self.dcs[self.state.dc_id].ipv6 is not None:
+            ip = self.dcs[self.state.dc_id].ipv6.to_bytes(16, 'big', signed=False)
         else:
-            ip = self.state.ipv6.to_bytes(4, 'big', signed=False)
+            ip = self.dcs[self.state.dc_id].ipv4.to_bytes(4, 'big', signed=False)
 
         return CURRENT_VERSION + StringSession.encode(struct.pack(
             _STRUCT_PREFORMAT.format(len(ip)),
             self.state.dc_id,
             ip,
-            self.state.port,
+            self.dcs[self.state.dc_id].port,
             self.dcs[self.state.dc_id].auth
         ))

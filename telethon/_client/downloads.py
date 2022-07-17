@@ -5,6 +5,7 @@ import pathlib
 import typing
 import inspect
 import asyncio
+import dataclasses
 
 from .._crypto import AES
 from .._misc import utils, helpers, requestiter, tlobject, hints, enums
@@ -55,7 +56,7 @@ class _DirectDownloadIter(requestiter.RequestIter):
             self.left = len(self.buffer)
             await self.close()
         else:
-            self.request.offset += self._stride
+            self.request = dataclasses.replace(self.request, offset=self.request.offset + self._stride)
 
     async def _request(self):
         try:
@@ -102,7 +103,7 @@ class _DirectDownloadIter(requestiter.RequestIter):
             if document.id != self.request.location.id:
                 raise
 
-            self.request.location.file_reference = document.file_reference
+            self.request.location = dataclasses.replace(self.request.location, file_reference=document.file_reference)
             return await self._request()
 
     async def close(self):
@@ -134,18 +135,18 @@ class _GenericDownloadIter(_DirectDownloadIter):
         before = self.request.offset
 
         # 1.2. We have to fetch from a valid offset, so remove that bad part
-        self.request.offset -= bad
+        self.request = dataclasses.replace(self.request, offset=self.request.offset - bad)
 
         done = False
         while not done and len(data) - bad < self._chunk_size:
             cur = await self._request()
-            self.request.offset += self.request.limit
+            self.request = dataclasses.replace(self.request, offset=self.request.offset - self.request.limit)
 
             data += cur
             done = len(cur) < self.request.limit
 
         # 1.3 Restore our last desired offset
-        self.request.offset = before
+        self.request = dataclasses.replace(self.request, offset=before)
 
         # 2. Fill the buffer with the data we have
         # 2.1. Slicing `bytes` is expensive, yield `memoryview` instead
@@ -157,7 +158,7 @@ class _GenericDownloadIter(_DirectDownloadIter):
             self.buffer.append(mem[i:i + self._chunk_size])
 
             # 2.3. We will yield this offset, so move to the next one
-            self.request.offset += self._stride
+            self.request = dataclasses.replace(self.request, offset=self.request.offset + self._stride)
 
         # 2.4. If we are in the last chunk, we will return the last partial data
         if done:
@@ -172,12 +173,12 @@ class _GenericDownloadIter(_DirectDownloadIter):
             # 3. Be careful with the offsets. Re-fetching a bit of data
             #    is fine, since it greatly simplifies things.
             # TODO Try to not re-fetch data
-            self.request.offset -= self._stride
+            self.request = dataclasses.replace(self.request, offset=self.request.offset - self._stride)
 
 
 async def download_profile_photo(
         self: 'TelegramClient',
-        entity: 'hints.EntityLike',
+        profile: 'hints.DialogLike',
         file: 'hints.FileLike' = None,
         *,
         thumb,
@@ -187,8 +188,9 @@ async def download_profile_photo(
     ENTITIES = (0x2da17977, 0xc5af5d94, 0x1f4661b9, 0xd49a2697)
     # ('InputPeer', 'InputUser', 'InputChannel')
     INPUTS = (0xc91c90b6, 0xe669bf46, 0x40f202fd)
+    entity = profile
     if not isinstance(entity, tlobject.TLObject) or entity.SUBCLASS_OF_ID in INPUTS:
-        entity = await self.get_entity(entity)
+        entity = await self.get_profile(entity)
 
     possible_names = []
     if entity.SUBCLASS_OF_ID not in ENTITIES:
@@ -215,7 +217,7 @@ async def download_profile_photo(
 
         dc_id = photo.dc_id
         loc = _tl.InputPeerPhotoFileLocation(
-            peer=await self.get_input_entity(entity),
+            peer=await self._get_input_peer(entity),
             photo_id=photo.photo_id,
             big=thumb >= enums.Size.LARGE
         )
@@ -242,7 +244,7 @@ async def download_profile_photo(
     except errors.LocationInvalidError:
         # See issue #500, Android app fails as of v4.6.0 (1155).
         # The fix seems to be using the full channel chat photo.
-        ie = await self.get_input_entity(entity)
+        ie = await self._get_input_peer(entity)
         ty = helpers._entity_type(ie)
         if ty == helpers._EntityType.CHANNEL:
             full = await self(_tl.fn.channels.GetFullChannel(ie))
@@ -257,7 +259,7 @@ async def download_profile_photo(
 
 async def download_media(
         self: 'TelegramClient',
-        message: 'hints.MessageLike',
+        media: 'hints.MessageLike',
         file: 'hints.FileLike' = None,
         *,
         size = (),
@@ -268,6 +270,7 @@ async def download_media(
     msg_data = None
 
     # TODO This won't work for messageService
+    message = media
     if isinstance(message, _tl.Message):
         date = message.date
         media = message.media
@@ -404,7 +407,7 @@ async def _download_file(
 
 def iter_download(
         self: 'TelegramClient',
-        file: 'hints.FileLike',
+        media: 'hints.FileLike',
         *,
         offset: int = 0,
         stride: int = None,
@@ -416,7 +419,7 @@ def iter_download(
 ):
     return _iter_download(
         self,
-        file,
+        media,
         offset=offset,
         stride=stride,
         limit=limit,

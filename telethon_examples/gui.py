@@ -53,7 +53,7 @@ def callback(func):
     def wrapped(*args, **kwargs):
         result = func(*args, **kwargs)
         if inspect.iscoroutine(result):
-            aio_loop.create_task(result)
+            asyncio.create_task(result)
 
     return wrapped
 
@@ -228,7 +228,7 @@ class App(tkinter.Tk):
         """
         Sends a message. Does nothing if the client is not connected.
         """
-        if not self.cl.is_connected():
+        if not self.cl.is_connected:
             return
 
         # The user needs to configure a chat where the message should be sent.
@@ -322,7 +322,7 @@ class App(tkinter.Tk):
         try:
             old = self.chat_id
             # Valid chat ID, set it and configure the colour back to white
-            self.chat_id = await self.cl.get_peer_id(chat)
+            self.chat_id = (await self.cl.get_profile(chat)).id
             self.chat.configure(bg='white')
 
             # If the chat ID changed, clear the

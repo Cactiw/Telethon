@@ -9,7 +9,7 @@ from .file import File
 from .inputfile import InputFile
 from .inputmessage import InputMessage
 from .button import build_reply_markup
-from ..._misc import utils, helpers, tlobject
+from ..._misc import utils, helpers, tlobject, markdown, html
 from ... import _tl, _misc
 
 
@@ -22,9 +22,14 @@ def _fwd(field, doc):
         return getattr(self._message, field, None)
 
     def fset(self, value):
-        setattr(self._message, field, value)
+        object.__setattr__(self._message, field, value)
 
     return property(fget, fset, None, doc)
+
+
+class _UninitClient:
+    def __getattribute__(self, attr):
+        raise ValueError('this Message instance does not come from a chat and cannot be used')
 
 
 # TODO Figure out a way to have the code generator error on missing fields
@@ -44,6 +49,9 @@ class Message(ChatGetter, SenderGetter):
     file with a certain performer, duration and thumbnail. However, most
     properties and methods won't work (since messages you create have not yet
     been sent).
+
+    Manually-created instances of this message cannot be responded to, edited,
+    and so on, because the message needs to first be sent for those to make sense.
     """
 
     # region Forwarded properties
@@ -409,6 +417,7 @@ class Message(ChatGetter, SenderGetter):
             buttons=buttons,
             ttl=ttl,
         )
+        self._client = _UninitClient()
 
     @classmethod
     def _new(cls, client, message, entities, input_chat):
@@ -419,14 +428,13 @@ class Message(ChatGetter, SenderGetter):
             if message.from_id is not None:
                 sender_id = utils.get_peer_id(message.from_id)
 
-        # Note that these calls would reset the client
-        ChatGetter.__init__(self, message.peer_id, broadcast=message.post)
-        SenderGetter.__init__(self, sender_id)
+        self = cls.__new__(cls)
         self._client = client
+        self._sender = entities.get(_tl.PeerUser(update.user_id))
+        self._chat = entities.get(_tl.PeerUser(update.user_id))
         self._message = message
 
         # Convenient storage for custom functions
-        self._text = None
         self._file = None
         self._reply_message = None
         self._buttons = None
@@ -489,7 +497,8 @@ class Message(ChatGetter, SenderGetter):
         * A string equal to ``'md'`` or ``'markdown`` for parsing with commonmark,
           ``'htm'`` or ``'html'`` for parsing HTML.
         * A ``callable``, which accepts a ``str`` as input and returns a tuple of
-          ``(parsed str, formatting entities)``.
+          ``(parsed str, formatting entities)``. Obtaining formatted text from a message in
+          this setting is not supported and will instead return the plain text.
         * A ``tuple`` of two ``callable``. The first must accept a ``str`` as input and return
           a tuple of ``(parsed str, list of formatting entities)``. The second must accept two
           parameters, a parsed ``str`` and a ``list`` of formatting entities, and must return
@@ -497,25 +506,7 @@ class Message(ChatGetter, SenderGetter):
 
         If it's not one of these values or types, the method fails accordingly.
         """
-        if isinstance(mode, str):
-            mode = mode.lower()
-            if mode in ('md', 'markdown'):
-                mode = (_misc.markdown.parse, _misc.markdown.unparse)
-            elif mode in ('htm', 'html'):
-                mode = (_misc.html.parse, _misc.html.unparse)
-            else:
-                raise ValueError(f'mode must be one of md, markdown, htm or html, but was {mode!r}')
-        elif callable(mode):
-            mode = (mode, lambda t, e: t)
-        elif isinstance(mode, tuple):
-            if len(mode) == 2 and callable(mode[0]) and callable(mode[1]):
-                mode = mode
-            else:
-                raise ValueError(f'mode must be a tuple of exactly two callables')
-        else:
-            raise TypeError(f'mode must be either a str, callable or tuple, but was {mode!r}')
-
-        InputMessage._default_parse_mode = mode
+        InputMessage._default_parse_mode = utils.sanitize_parse_mode(mode)
 
     @classmethod
     def set_default_link_preview(cls, enabled):
@@ -532,44 +523,30 @@ class Message(ChatGetter, SenderGetter):
     def client(self):
         """
         Returns the `TelegramClient <telethon.client.telegramclient.TelegramClient>`
-        that *patched* this message. This will only be present if you
-        **use the friendly methods**, it won't be there if you invoke
-        raw API methods manually, in which case you should only access
-        members, not properties.
+        which returned this message from a friendly method. It won't be there if you
+        invoke raw API methods manually (because those return the original :tl:`Message`,
+        not this class).
         """
         return self._client
 
     @property
     def text(self):
         """
-        The message text, formatted using the client's default
-        parse mode. Will be `None` for :tl:`MessageService`.
+        The message text, formatted using the default parse mode.
+        Will be `None` for :tl:`MessageService`.
         """
-        if self._text is None and self._client:
-            if not self._client.parse_mode:
-                self._text = self.message
-            else:
-                self._text = self._client.parse_mode.unparse(
-                    self.message, self.entities)
-
-        return self._text
+        return InputMessage._default_parse_mode[1](self.message, self.entities)
 
     @text.setter
     def text(self, value):
-        self._text = value
-        if self._client and self._client.parse_mode:
-            self.message, self.entities = self._client.parse_mode.parse(value)
-        else:
-            self.message, self.entities = value, []
+        self.message, self.entities = InputMessage._default_parse_mode[0](value)
 
     @property
     def raw_text(self):
         """
-        The raw message text, ignoring any formatting.
-        Will be `None` for :tl:`MessageService`.
+        The plain message text, ignoring any formatting. Will be `None` for :tl:`MessageService`.
 
-        Setting a value to this field will erase the
-        `entities`, unlike changing the `message` member.
+        Setting a value to this field will erase the `entities`, unlike changing the `message` member.
         """
         return self.message
 
@@ -577,7 +554,28 @@ class Message(ChatGetter, SenderGetter):
     def raw_text(self, value):
         self.message = value
         self.entities = []
-        self._text = None
+
+    @property
+    def markdown(self):
+        """
+        The message text, formatted using markdown. Will be `None` for :tl:`MessageService`.
+        """
+        return markdown.unparse(self.message, self.entities)
+
+    @markdown.setter
+    def markdown(self, value):
+        self.message, self.entities = markdown.parse(value)
+
+    @property
+    def html(self):
+        """
+        The message text, formatted using HTML. Will be `None` for :tl:`MessageService`.
+        """
+        return html.unparse(self.message, self.entities)
+
+    @html.setter
+    def html(self, value):
+        self.message, self.entities = html.parse(value)
 
     @property
     def is_reply(self):
@@ -868,7 +866,7 @@ class Message(ChatGetter, SenderGetter):
         """
         # If the client wasn't set we can't emulate the behaviour correctly,
         # so as a best-effort simply return the chat peer.
-        if self._client and not self.out and self.is_private:
+        if not self.out and self.chat.is_user:
             return _tl.PeerUser(self._client._session_state.user_id)
 
         return self.peer_id
@@ -923,14 +921,14 @@ class Message(ChatGetter, SenderGetter):
 
         The result will be cached after its first use.
         """
-        if self._reply_message is None and self._client:
+        if self._reply_message is None:
             if not self.reply_to:
                 return None
 
             # Bots cannot access other bots' messages by their ID.
             # However they can access them through replies...
             self._reply_message = await self._client.get_messages(
-                await self.get_input_chat() if self.is_channel else None,
+                self.chat,
                 ids=_tl.InputMessageReplyTo(self.id)
             )
             if not self._reply_message:
@@ -939,7 +937,7 @@ class Message(ChatGetter, SenderGetter):
                 # If that's the case, give it a second chance accessing
                 # directly by its ID.
                 self._reply_message = await self._client.get_messages(
-                    self._input_chat if self.is_channel else None,
+                    self.chat,
                     ids=self.reply_to.reply_to_msg_id
                 )
 
@@ -951,9 +949,8 @@ class Message(ChatGetter, SenderGetter):
         `telethon.client.messages.MessageMethods.send_message`
         with ``entity`` already set.
         """
-        if self._client:
-            return await self._client.send_message(
-                await self.get_input_chat(), *args, **kwargs)
+        return await self._client.send_message(
+            await self.get_input_chat(), *args, **kwargs)
 
     async def reply(self, *args, **kwargs):
         """
@@ -961,10 +958,9 @@ class Message(ChatGetter, SenderGetter):
         `telethon.client.messages.MessageMethods.send_message`
         with both ``entity`` and ``reply_to`` already set.
         """
-        if self._client:
-            kwargs['reply_to'] = self.id
-            return await self._client.send_message(
-                await self.get_input_chat(), *args, **kwargs)
+        kwargs['reply_to'] = self.id
+        return await self._client.send_message(
+            await self.get_input_chat(), *args, **kwargs)
 
     async def forward_to(self, *args, **kwargs):
         """
@@ -976,10 +972,9 @@ class Message(ChatGetter, SenderGetter):
         this `forward_to` method. Use a
         `telethon.client.telegramclient.TelegramClient` instance directly.
         """
-        if self._client:
-            kwargs['messages'] = self.id
-            kwargs['from_peer'] = await self.get_input_chat()
-            return await self._client.forward_messages(*args, **kwargs)
+        kwargs['messages'] = self.id
+        kwargs['from_peer'] = await self.get_input_chat()
+        return await self._client.forward_messages(*args, **kwargs)
 
     async def edit(self, *args, **kwargs):
         """
@@ -1022,11 +1017,10 @@ class Message(ChatGetter, SenderGetter):
         this `delete` method. Use a
         `telethon.client.telegramclient.TelegramClient` instance directly.
         """
-        if self._client:
-            return await self._client.delete_messages(
-                await self.get_input_chat(), [self.id],
-                *args, **kwargs
-            )
+        return await self._client.delete_messages(
+            await self.get_input_chat(), [self.id],
+            *args, **kwargs
+        )
 
     async def download_media(self, *args, **kwargs):
         """
@@ -1034,10 +1028,9 @@ class Message(ChatGetter, SenderGetter):
         for `telethon.client.downloads.DownloadMethods.download_media`
         with the ``message`` already set.
         """
-        if self._client:
-            # Passing the entire message is important, in case it has to be
-            # refetched for a fresh file reference.
-            return await self._client.download_media(self, *args, **kwargs)
+        # Passing the entire message is important, in case it has to be
+        # refetched for a fresh file reference.
+        return await self._client.download_media(self, *args, **kwargs)
 
     async def click(self, i=None, j=None,
                     *, text=None, filter=None, data=None, share_phone=None,
@@ -1145,9 +1138,6 @@ class Message(ChatGetter, SenderGetter):
                     # Click on a button requesting a phone
                     await message.click(0, share_phone=True)
         """
-        if not self._client:
-            return
-
         if data:
             chat = await self.get_input_chat()
             if not chat:
@@ -1237,9 +1227,8 @@ class Message(ChatGetter, SenderGetter):
         <telethon.client.messages.MessageMethods.mark_read>`
         with both ``entity`` and ``message`` already set.
         """
-        if self._client:
-            await self._client.mark_read(
-                await self.get_input_chat(), max_id=self.id)
+        await self._client.mark_read(
+            await self.get_input_chat(), max_id=self.id)
 
     async def pin(self, *, notify=False, pm_oneside=False):
         """
@@ -1250,9 +1239,8 @@ class Message(ChatGetter, SenderGetter):
         # TODO Constantly checking if client is a bit annoying,
         #      maybe just make it illegal to call messages from raw API?
         #      That or figure out a way to always set it directly.
-        if self._client:
-            return await self._client.pin_message(
-                await self.get_input_chat(), self.id, notify=notify, pm_oneside=pm_oneside)
+        return await self._client.pin_message(
+            await self.get_input_chat(), self.id, notify=notify, pm_oneside=pm_oneside)
 
     async def unpin(self):
         """
@@ -1260,9 +1248,21 @@ class Message(ChatGetter, SenderGetter):
         `telethon.client.messages.MessageMethods.unpin_message`
         with both ``entity`` and ``message`` already set.
         """
+        return await self._client.unpin_message(
+            await self.get_input_chat(), self.id)
+
+    async def react(self, reaction=None):
+        """
+        Reacts on the given message. Shorthand for
+        `telethon.client.messages.MessageMethods.send_reaction`
+        with both ``entity`` and ``message`` already set.
+        """
         if self._client:
-            return await self._client.unpin_message(
-                await self.get_input_chat(), self.id)
+            return await self._client.send_reaction(
+                await self.get_input_chat(),
+                self.id,
+                reaction
+            )
 
     # endregion Public Methods
 
@@ -1285,12 +1285,8 @@ class Message(ChatGetter, SenderGetter):
         Re-fetches this message to reload the sender and chat entities,
         along with their input versions.
         """
-        if not self._client:
-            return
-
         try:
-            chat = await self.get_input_chat() if self.is_channel else None
-            msg = await self._client.get_messages(chat, ids=self.id)
+            msg = await self._client.get_messages(self.chat, ids=self.id)
         except ValueError:
             return  # We may not have the input chat/get message failed
         if not msg:
@@ -1305,14 +1301,11 @@ class Message(ChatGetter, SenderGetter):
         self._forward = msg._forward
         self._action_entities = msg._action_entities
 
-    async def _refetch_sender(self):
-        await self._reload_message()
-
     def _set_buttons(self, chat, bot):
         """
         Helper methods to set the buttons given the input sender and chat.
         """
-        if self._client and isinstance(self.reply_markup, (
+        if isinstance(self.reply_markup, (
                 _tl.ReplyInlineMarkup, _tl.ReplyKeyboardMarkup)):
             self._buttons = [[
                 MessageButton(self._client, button, chat, bot, self.id)
@@ -1328,7 +1321,7 @@ class Message(ChatGetter, SenderGetter):
         to know what bot we want to start. Raises ``ValueError`` if the bot
         cannot be found but is needed. Returns `None` if it's not needed.
         """
-        if self._client and not isinstance(self.reply_markup, (
+        if not isinstance(self.reply_markup, (
                 _tl.ReplyInlineMarkup, _tl.ReplyKeyboardMarkup)):
             return None
 
@@ -1362,39 +1355,6 @@ class Message(ChatGetter, SenderGetter):
     def to_dict(self):
         return self._message.to_dict()
 
-    def _to_dict(self):
-        return {
-            '_': 'Message',
-            'id': self.id,
-            'out': self.out,
-            'date': self.date,
-            'text': self.text,
-            'sender': self.sender,
-            'chat': self.chat,
-            'mentioned': self.mentioned,
-            'media_unread': self.media_unread,
-            'silent': self.silent,
-            'post': self.post,
-            'from_scheduled': self.from_scheduled,
-            'legacy': self.legacy,
-            'edit_hide': self.edit_hide,
-            'pinned': self.pinned,
-            'forward': self.forward,
-            'via_bot': self.via_bot,
-            'reply_to': self.reply_to,
-            'reply_markup': self.reply_markup,
-            'views': self.views,
-            'forwards': self.forwards,
-            'replies': self.replies,
-            'edit_date': self.edit_date,
-            'post_author': self.post_author,
-            'grouped_id': self.grouped_id,
-            'ttl_period': self.ttl_period,
-            'action': self.action,
-            'media': self.media,
-            'action_entities': self.action_entities,
-        }
-
     def __repr__(self):
         return helpers.pretty_print(self)
 
@@ -1403,6 +1363,3 @@ class Message(ChatGetter, SenderGetter):
 
     def stringify(self):
         return helpers.pretty_print(self, indent=0)
-
-
-# TODO set md by default if commonmark is installed else nothing
