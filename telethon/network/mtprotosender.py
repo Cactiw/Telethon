@@ -181,7 +181,7 @@ class MTProtoSender:
                 raise
 
             self._send_queue.append(state)
-            return asyncio.wait_for(state.future, 5 * 60)
+            return asyncio.ensure_future(asyncio.wait_for(state.future, 5 * 60))
         else:
             states = []
             futures = []
