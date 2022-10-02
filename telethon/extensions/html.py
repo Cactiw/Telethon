@@ -8,12 +8,11 @@ from html.parser import HTMLParser
 from typing import Iterable, Optional, Tuple, List
 
 from .. import helpers
-from .._tl import MessageEntitySpoiler
 from ..tl.types import (
     MessageEntityBold, MessageEntityItalic, MessageEntityCode,
     MessageEntityPre, MessageEntityEmail, MessageEntityUrl,
     MessageEntityTextUrl, MessageEntityMentionName,
-    MessageEntityUnderline, MessageEntityStrike, MessageEntityBlockquote,
+    MessageEntityUnderline, MessageEntityStrike, MessageEntityBlockquote, MessageEntitySpoiler,
     TypeMessageEntity
 )
 
