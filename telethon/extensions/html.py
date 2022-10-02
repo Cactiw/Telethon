@@ -8,6 +8,7 @@ from html.parser import HTMLParser
 from typing import Iterable, Optional, Tuple, List
 
 from .. import helpers
+from .._tl import MessageEntitySpoiler
 from ..tl.types import (
     MessageEntityBold, MessageEntityItalic, MessageEntityCode,
     MessageEntityPre, MessageEntityEmail, MessageEntityUrl,
@@ -55,6 +56,8 @@ class HTMLToTelegramParser(HTMLParser):
             EntityType = MessageEntityStrike
         elif tag == 'blockquote':
             EntityType = MessageEntityBlockquote
+        elif tag == 'tg-spoiler':
+            EntityType = MessageEntitySpoiler
         elif tag == 'code':
             try:
                 # If we're in the middle of a <pre> tag, this <code> tag is
