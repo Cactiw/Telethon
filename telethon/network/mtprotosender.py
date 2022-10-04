@@ -1,6 +1,9 @@
 import asyncio
 import collections
+import functools
+import logging
 import struct
+import traceback
 
 from . import authenticator
 from ..extensions.messagepacker import MessagePacker
@@ -145,6 +148,19 @@ class MTProtoSender:
         """
         await self._disconnect()
 
+    def retry_tgread(self, future: asyncio.Future, request, ordered=False):
+        @functools.wraps(future)
+        async def send_tgread(*args, **kwargs):
+            await future
+            try:
+                return future.result()
+            except TypeNotFoundError:
+                self._log.warning(f'Catched TypeNotFoundError: {traceback.format_exc()}')
+                await asyncio.sleep(0.2)
+                return self.send(request, ordered)
+        return send_tgread()
+
+
     def send(self, request, ordered=False):
         """
         This method enqueues the given request to be sent. Its send
@@ -181,7 +197,7 @@ class MTProtoSender:
                 raise
 
             self._send_queue.append(state)
-            return asyncio.ensure_future(asyncio.wait_for(state.future, 5 * 60))
+            return asyncio.ensure_future(asyncio.wait_for(self.retry_tgread(state.future, request, ordered), 5 * 60))
         else:
             states = []
             futures = []
@@ -394,7 +410,7 @@ class MTProtoSender:
 
             except Exception as e:
                 last_error = e
-                self._log.exception('Unexpected exception reconnecting on '
+                self._log.info('Unexpected exception reconnecting on '
                                     'attempt %d', attempt)
 
                 await asyncio.sleep(self._delay)
