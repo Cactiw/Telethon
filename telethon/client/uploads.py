@@ -110,7 +110,7 @@ class UploadMethods:
             formatting_entities: typing.Optional[typing.List[types.TypeMessageEntity]] = None,
             voice_note: bool = False,
             video_note: bool = False,
-            buttons: 'hints.MarkupLike' = None,
+            buttons: typing.Optional['hints.MarkupLike'] = None,
             silent: bool = None,
             background: bool = None,
             supports_streaming: bool = False,
@@ -458,7 +458,7 @@ class UploadMethods:
                 ))
 
                 fm = utils.get_input_media(
-                    r.document, supports_streaming=supports_streaming)
+                   r.document, supports_streaming=supports_streaming)
 
             if captions:
                 caption, msg_entities = captions.pop()
@@ -753,6 +753,10 @@ class UploadMethods:
                     thumb = str(thumb.absolute())
                 thumb = await self.upload_file(thumb, file_size=file_size)
 
+            # setting `nosound_video` to `True` doesn't affect videos with sound
+            # instead it prevents sending silent videos as GIFs
+            nosound_video = True if mime_type.split("/")[0] == 'video' else None
+
             if voice_note and mime_type == "application/octet-stream":
                 mime_type = "audio/ogg"
 
@@ -762,7 +766,8 @@ class UploadMethods:
                 attributes=attributes,
                 thumb=thumb,
                 force_file=force_document and not is_image,
-                ttl_seconds=ttl
+                ttl_seconds=ttl,
+                nosound_video=nosound_video
             )
         return file_handle, media, as_image
 

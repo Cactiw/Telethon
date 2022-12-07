@@ -164,7 +164,7 @@ def _get_description(arg):
     if arg.can_be_inferred:
         desc.append('If left unspecified, it will be inferred automatically.')
         otherwise = True
-    elif arg.is_flag:
+    elif arg.flag:
         desc.append('This argument defaults to '
                     '<code>None</code> and can be omitted.')
         otherwise = True
@@ -381,7 +381,7 @@ def _write_html_pages(tlobjects, methods, layer, input_res):
                     ns, friendly = tlobject.friendly
                     docs.write_text(
                         'Please refer to the documentation of <a href="'
-                        'https://docs.telethon.dev/en/latest/modules/client.html'
+                        'https://docs.telethon.dev/en/stable/modules/client.html'
                         '#telethon.client.{0}.{1}"><code>client.{1}()</code></a> '
                         'to learn about the parameters and see several code '
                         'examples on how to use it.'

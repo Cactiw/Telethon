@@ -204,7 +204,24 @@ class _MessagesIter(RequestIter):
             message._finish_init(self.client, entities, self.entity)
             self.buffer.append(message)
 
-        if len(r.messages) < self.request.limit:
+        # Not a slice (using offset would return the same, with e.g. SearchGlobal).
+        if isinstance(r, types.messages.Messages):
+            return True
+
+        # Some channels are "buggy" and may return less messages than
+        # requested (apparently, the messages excluded are, for example,
+        # "not displayable due to local laws").
+        #
+        # This means it's not safe to rely on `len(r.messages) < req.limit` as
+        # the stop condition. Unfortunately more requests must be made.
+        #
+        # However we can still check if the highest ID is equal to or lower
+        # than the limit, in which case there won't be any more messages
+        # because the lowest message ID is 1.
+        #
+        # We also assume the API will always return, at least, one message if
+        # there is more to fetch.
+        if not r.messages or r.messages[0].id <= self.request.limit:
             return True
 
         # Get the last message that's not empty (in some rare cases
@@ -618,7 +635,7 @@ class MessageMethods:
             thumb: 'hints.FileLike' = None,
             force_document: bool = False,
             clear_draft: bool = False,
-            buttons: 'hints.MarkupLike' = None,
+            buttons: typing.Optional['hints.MarkupLike'] = None,
             silent: bool = None,
             background: bool = None,
             supports_streaming: bool = False,
@@ -831,6 +848,7 @@ class MessageMethods:
                     reply_to=reply_to,
                     buttons=markup,
                     formatting_entities=message.entities,
+                    parse_mode=None,  # explicitly disable parse_mode to force using even empty formatting_entities
                     schedule=schedule
                 )
 
@@ -880,7 +898,8 @@ class MessageMethods:
                 media=result.media,
                 entities=result.entities,
                 reply_markup=request.reply_markup,
-                ttl_period=result.ttl_period
+                ttl_period=result.ttl_period,
+                reply_to=types.MessageReplyHeader(request.reply_to_msg_id)
             )
             message._finish_init(self, {}, entity)
             return message
@@ -1029,7 +1048,7 @@ class MessageMethods:
             file: 'hints.FileLike' = None,
             thumb: 'hints.FileLike' = None,
             force_document: bool = False,
-            buttons: 'hints.MarkupLike' = None,
+            buttons: typing.Optional['hints.MarkupLike'] = None,
             supports_streaming: bool = False,
             schedule: 'hints.DateLike' = None
     ) -> 'types.Message':
@@ -1277,7 +1296,8 @@ class MessageMethods:
             message: 'typing.Union[hints.MessageIDLike, typing.Sequence[hints.MessageIDLike]]' = None,
             *,
             max_id: int = None,
-            clear_mentions: bool = False) -> bool:
+            clear_mentions: bool = False,
+            clear_reactions: bool = False) -> bool:
         """
         Marks messages as read and optionally clears mentions.
 
@@ -1311,6 +1331,13 @@ class MessageMethods:
                 If no message is provided, this will be the only action
                 taken.
 
+            clear_reactions (`bool`):
+                Whether the reactions badge should be cleared (so that
+                there are no more reaction notifications) or not for the given entity.
+
+                If no message is provided, this will be the only action
+                taken.
+
         Example
             .. code-block:: python
 
@@ -1333,6 +1360,10 @@ class MessageMethods:
         entity = await self.get_input_entity(entity)
         if clear_mentions:
             await self(functions.messages.ReadMentionsRequest(entity))
+            if max_id is None and not clear_reactions:
+                return True
+        if clear_reactions:
+            await self(functions.messages.ReadReactionsRequest(entity))
             if max_id is None:
                 return True
 
