@@ -477,7 +477,7 @@ class TelegramBaseClient(abc.ABC):
         # This is backported from v2 in a very ad-hoc way just to get proper update handling
         self._catch_up = catch_up
         self._updates_queue = asyncio.Queue()
-        self._message_box = MessageBox()
+        self._message_box = MessageBox(self._log['messagebox'])
         # This entity cache is tailored for the messagebox and is not used for absolutely everything like _entity_cache
         self._mb_entity_cache = MbEntityCache()  # required for proper update handling (to know when to getDifference)
 
@@ -655,9 +655,6 @@ class TelegramBaseClient(abc.ABC):
                 # You don't need to use this if you used "with client"
                 await client.disconnect()
         """
-        if self.session is None:
-            return  # already logged out and disconnected
-
         if self.loop.is_running():
             # Disconnect may be called from an event handler, which would
             # cancel itself during itself and never actually complete the
@@ -705,6 +702,9 @@ class TelegramBaseClient(abc.ABC):
                 connection._proxy = proxy
 
     async def _disconnect_coro(self: 'TelegramClient'):
+        if self.session is None:
+            return  # already logged out and disconnected
+
         await self._disconnect()
 
         # Also clean-up all exported senders because we're done with them
