@@ -917,7 +917,7 @@ class MessageMethods:
             silent: bool = None,
             as_album: bool = None,
             schedule: 'hints.DateLike' = None,
-            drop_author: bool = False,
+            drop_author: bool = None,
     ) -> 'typing.Sequence[types.Message]':
         """
         Forwards the given messages to the specified entity.
