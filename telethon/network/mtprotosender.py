@@ -71,7 +71,7 @@ class MTProtoSender:
         # pending futures should be cancelled.
         self._user_connected = False
         self._reconnecting = False
-        self._disconnected = asyncio.get_event_loop().create_future()
+        self._disconnected = helpers.get_running_loop().create_future()
         self._disconnected.set_result(None)
 
         # We need to join the loops upon disconnection
@@ -277,7 +277,7 @@ class MTProtoSender:
             await self._disconnect(error=e)
             raise e
 
-        loop = asyncio.get_event_loop()
+        loop = helpers.get_running_loop()
         self._log.debug('Starting send loop')
         self._send_loop_handle = loop.create_task(self._send_loop())
 
@@ -424,7 +424,7 @@ class MTProtoSender:
                 self._pending_state.clear()
 
                 if self._auto_reconnect_callback:
-                    asyncio.get_event_loop().create_task(self._auto_reconnect_callback())
+                    helpers.get_running_loop().create_task(self._auto_reconnect_callback())
 
                 break
         else:
@@ -449,7 +449,7 @@ class MTProtoSender:
             # gets stuck.
             # TODO It still gets stuck? Investigate where and why.
             self._reconnecting = True
-            asyncio.get_event_loop().create_task(self._reconnect(error))
+            helpers.get_running_loop().create_task(self._reconnect(error))
 
     def _keepalive_ping(self, rnd_id):
         """
@@ -702,11 +702,28 @@ class MTProtoSender:
         _tl.UpdatesCombined.CONSTRUCTOR_ID,
         _tl.Updates.CONSTRUCTOR_ID,
         _tl.UpdateShortSentMessage.CONSTRUCTOR_ID,
+    )), _update_like_ids=frozenset((
+        _tl.messages.AffectedHistory.CONSTRUCTOR_ID,
+        _tl.messages.AffectedMessages.CONSTRUCTOR_ID,
+        _tl.messages.AffectedFoundMessages.CONSTRUCTOR_ID,
     ))):
         try:
             if obj.CONSTRUCTOR_ID in _update_ids:
                 obj._self_outgoing = True  # flag to only process, but not dispatch these
                 self._updates_queue.put_nowait(obj)
+            elif obj.CONSTRUCTOR_ID in _update_like_ids:
+                # Ugly "hack" (?) - otherwise bots reliably detect gaps when deleting messages.
+                #
+                # Note: the `date` being `None` is used to check for `updatesTooLong`, so `0` is
+                # used instead. It is still not read, because `updateShort` has no `seq`.
+                #
+                # Some requests, such as `readHistory`, also return these types. But the `pts_count`
+                # seems to be zero, so while this will produce some bogus `updateDeleteMessages`,
+                # it's still one of the "cleaner" approaches to handling the new `pts`.
+                # `updateDeleteMessages` is probably the "least-invasive" update that can be used.
+                upd = _tl.UpdateShort(_tl.UpdateDeleteMessages([], obj.pts, obj.pts_count), 0)
+                upd._self_outgoing = True
+                self._updates_queue.put_nowait(upd)
         except AttributeError:
             pass
 
