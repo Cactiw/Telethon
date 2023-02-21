@@ -194,7 +194,7 @@ class TelegramBaseClient(abc.ABC):
             Defaults to `lang_code`.
 
         loop (`asyncio.AbstractEventLoop`, optional):
-            Asyncio event loop to use. Defaults to `asyncio.get_event_loop()`.
+            Asyncio event loop to use. Defaults to `asyncio.get_running_loop()`.
             This argument is ignored.
 
         base_logger (`str` | `logging.Logger`, optional):
@@ -515,7 +515,7 @@ class TelegramBaseClient(abc.ABC):
                 # Join the task (wait for it to complete)
                 await task
         """
-        return asyncio.get_event_loop()
+        return helpers.get_running_loop()
 
     @property
     def disconnected(self: 'TelegramClient') -> asyncio.Future:
@@ -604,13 +604,11 @@ class TelegramBaseClient(abc.ABC):
 
         self._init_request.query = functions.help.GetConfigRequest()
 
-        await self._sender.send(functions.InvokeWithLayerRequest(
-            LAYER, self._init_request
-        ))
-        # result = await self._sender.send(GetLanguagesRequest(self.lang_pack))
-        # print(result)
-        # result = await self._sender.send(GetLangPackRequest(self.lang_pack, self.lang_code))
-        # print(result)
+        req = self._init_request
+        if self._no_updates:
+            req = functions.InvokeWithoutUpdatesRequest(req)
+
+        await self._sender.send(functions.InvokeWithLayerRequest(LAYER, req))
 
         if self._message_box.is_empty():
             me = await self.get_me()
