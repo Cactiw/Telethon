@@ -757,6 +757,9 @@ class UploadMethods:
             # instead it prevents sending silent videos as GIFs
             nosound_video = True if mime_type.split("/")[0] == 'video' else None
 
+            if voice_note and mime_type == "application/octet-stream":
+                mime_type = "audio/ogg"
+
             media = types.InputMediaUploadedDocument(
                 file=file_handle,
                 mime_type=mime_type,

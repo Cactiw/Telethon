@@ -1,6 +1,9 @@
 import asyncio
 import collections
+import functools
+import logging
 import struct
+import traceback
 
 from . import authenticator
 from ..extensions.messagepacker import MessagePacker
@@ -150,6 +153,19 @@ class MTProtoSender:
         """
         await self._disconnect()
 
+    def retry_tgread(self, future: asyncio.Future, request, ordered=False):
+        @functools.wraps(future)
+        async def send_tgread(*args, **kwargs):
+            await future
+            try:
+                return future.result()
+            except TypeNotFoundError:
+                self._log.warning(f'Catched TypeNotFoundError: {traceback.format_exc()}')
+                await asyncio.sleep(0.2)
+                return self.send(request, ordered)
+        return send_tgread()
+
+
     def send(self, request, ordered=False):
         """
         This method enqueues the given request to be sent. Its send
@@ -186,7 +202,7 @@ class MTProtoSender:
                 raise
 
             self._send_queue.append(state)
-            return state.future
+            return asyncio.ensure_future(asyncio.wait_for(self.retry_tgread(state.future, request, ordered), 5 * 60))
         else:
             states = []
             futures = []
@@ -278,11 +294,16 @@ class MTProtoSender:
 
     async def _try_connect(self, attempt):
         try:
+            import python_socks._errors as python_socks_errors
+            errors = (python_socks_errors.ProxyError, python_socks_errors.ProxyTimeoutError, python_socks_errors.ProxyConnectionError)
+        except ImportError:
+            errors = ()
+        try:
             self._log.debug('Connection attempt %d...', attempt)
             await self._connection.connect(timeout=self._connect_timeout)
             self._log.debug('Connection success!')
             return True
-        except (IOError, asyncio.TimeoutError) as e:
+        except (IOError, asyncio.TimeoutError, *errors) as e:
             self._log.warning('Attempt %d at connecting failed: %s: %s',
                               attempt, type(e).__name__, e)
             await asyncio.sleep(self._delay)
@@ -383,6 +404,9 @@ class MTProtoSender:
                 # TODO there should probably only be one place to except all these errors
                 if isinstance(e, InvalidBufferError) and e.code == 404:
                     self._log.info('Server does not know about the current auth key; the session may need to be recreated')
+                    # self.auth_key.key = None # Never delete it
+                    # if self._auth_key_callback:
+                    #     self._auth_key_callback(None)
                     last_error = AuthKeyNotFound()
                     ok = False
                     break
@@ -391,7 +415,7 @@ class MTProtoSender:
 
             except Exception as e:
                 last_error = e
-                self._log.exception('Unexpected exception reconnecting on '
+                self._log.info('Unexpected exception reconnecting on '
                                     'attempt %d', attempt)
 
                 await asyncio.sleep(self._delay)
@@ -534,10 +558,13 @@ class MTProtoSender:
                 # should not be considered safe and it should be ignored.
                 self._log.warning('Security error while unpacking a '
                                   'received message: %s', e)
-                continue
+                # continue  # Anyway process message
             except BufferError as e:
                 if isinstance(e, InvalidBufferError) and e.code == 404:
                     self._log.info('Server does not know about the current auth key; the session may need to be recreated')
+                    # self.auth_key.key = None  # DO NOT DELETE KEY
+                    # if self._auth_key_callback:
+                    #     self._auth_key_callback(None)
                     await self._disconnect(error=AuthKeyNotFound())
                 else:
                     self._log.warning('Invalid buffer %s', e)
@@ -550,8 +577,9 @@ class MTProtoSender:
 
             try:
                 await self._process_message(message)
-            except Exception:
-                self._log.exception('Unhandled error while processing msgs')
+            except Exception as e:
+                self._start_reconnect(e)
+                self._log.warning('Unhandled error while processing msgs. Reconnecting.')
 
     # Response Handlers
 

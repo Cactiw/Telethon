@@ -7,6 +7,7 @@ import typing
 from .. import helpers, utils, hints, errors
 from ..requestiter import RequestIter
 from ..tl import types, functions, custom
+from ..tl.types.channels import ChannelParticipants
 
 if typing.TYPE_CHECKING:
     from .telegramclient import TelegramClient

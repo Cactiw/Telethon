@@ -489,7 +489,8 @@ class AuthMethods:
             phone: str,
             *,
             force_sms: bool = False,
-            _retry_count: int = 0) -> 'types.auth.SentCode':
+            _retry_count: int = 0,
+            code_settings: types.CodeSettings = None) -> 'types.auth.SentCode':
         """
         Sends the Telegram code needed to login to the given phone number.
 
@@ -499,6 +500,9 @@ class AuthMethods:
 
             force_sms (`bool`, optional):
                 Whether to force sending as SMS.
+
+            code_settings (`types.CodeSettings`, optional):
+                Code settings for flash calls request and other settings.
 
         Returns
             An instance of :tl:`SentCode`.
@@ -510,6 +514,9 @@ class AuthMethods:
                 sent = await client.send_code_request(phone)
                 print(sent)
         """
+        if code_settings is None:
+            code_settings = types.CodeSettings()
+
         result = None
         phone = utils.parse_phone(phone) or self._phone
         phone_hash = self._phone_code_hash.get(phone)
@@ -517,12 +524,10 @@ class AuthMethods:
         if not phone_hash:
             try:
                 result = await self(functions.auth.SendCodeRequest(
-                    phone, self.api_id, self.api_hash, types.CodeSettings()))
+                    phone, self.api_id, self.api_hash, code_settings))
             except errors.AuthRestartError:
-                if _retry_count > 2:
-                    raise
-                return await self.send_code_request(
-                    phone, force_sms=force_sms, _retry_count=_retry_count+1)
+                return await self.send_code_request(phone, force_sms=force_sms, _retry_count=_retry_count+1,
+                                                    code_settings=code_settings)
 
             # TODO figure out when/if/how this can happen
             if isinstance(result, types.auth.SentCodeSuccess):

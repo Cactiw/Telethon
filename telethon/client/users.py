@@ -121,7 +121,7 @@ class UserMethods:
                 should_raise = isinstance(e, (
                     errors.PhoneMigrateError, errors.NetworkMigrateError
                 ))
-                if should_raise and await self.is_user_authorized():
+                if self._raise_migrated_error or (should_raise and await self.is_user_authorized()):
                     raise
                 await self._switch_dc(e.new_dc)
 

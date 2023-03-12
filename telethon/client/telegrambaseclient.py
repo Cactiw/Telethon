@@ -16,10 +16,12 @@ from ..network import MTProtoSender, Connection, ConnectionTcpFull, TcpMTProxy
 from ..sessions import Session, SQLiteSession, MemorySession
 from ..tl import functions, types
 from ..tl.alltlobjects import LAYER
+from ..tl.functions.langpack import GetLanguagesRequest, GetLangPackRequest
+from ..tl.types import JsonObjectValue, JsonString, JsonNumber, JsonArray, JsonObject
 from .._updates import MessageBox, EntityCache as MbEntityCache, SessionState, ChannelState, Entity, EntityType
 
 DEFAULT_DC_ID = 2
-DEFAULT_IPV4_IP = '149.154.167.51'
+DEFAULT_IPV4_IP = '149.154.167.50'
 DEFAULT_IPV6_IP = '2001:67c:4e8:f002::a'
 DEFAULT_PORT = 443
 
@@ -243,15 +245,26 @@ class TelegramBaseClient(abc.ABC):
             app_version: str = None,
             lang_code: str = 'en',
             system_lang_code: str = 'en',
+            lang_pack: str = None,
             loop: asyncio.AbstractEventLoop = None,
             base_logger: typing.Union[str, logging.Logger] = None,
             receive_updates: bool = True,
-            catch_up: bool = False
+            catch_up: bool = False,
+            data: str = None,
+            installer: str = None,
+            package_id: str = None,
+            device_token: str = None,
+            hide_proxy: bool = False,
+            allowed_updates_chats: list = None,
+            raise_migrated_error: bool = False
     ):
         if not api_id or not api_hash:
             raise ValueError(
                 "Your API ID or Hash cannot be empty or None. "
                 "Refer to telethon.rtfd.io for more information.")
+
+        if lang_pack is None:
+            lang_pack = ''
 
         self._use_ipv6 = use_ipv6
 
@@ -311,6 +324,9 @@ class TelegramBaseClient(abc.ABC):
         self._entity_cache = EntityCache()
         self.api_id = int(api_id)
         self.api_hash = api_hash
+        self.lang_code = lang_code
+        self.lang_pack = lang_pack
+        self._raise_migrated_error = raise_migrated_error
 
         # Current proxy implementation requires `sock_connect`, and some
         # event loops lack this method. If the current loop is missing it,
@@ -367,6 +383,30 @@ class TelegramBaseClient(abc.ABC):
             default_device_model = system.machine
         default_system_version = re.sub(r'-.+','',system.release)
 
+        params = None
+        if data is not None:
+            values = []
+
+            object_value = JsonObjectValue(key="device_token", value=JsonString(device_token))
+            values.append(object_value)
+
+            object_value = JsonObjectValue(key="data", value=JsonString(data))
+            values.append(object_value)
+
+            object_value = JsonObjectValue(key="installer", value=JsonString(installer))
+            values.append(object_value)
+
+            object_value = JsonObjectValue(key="package_id", value=JsonString(package_id))
+            values.append(object_value)
+
+            object_value = JsonObjectValue(key="tz_offset", value=JsonNumber(10800))  # 3 hours
+            values.append(object_value)
+
+            params = JsonObject(values)
+
+        if not system_lang_code:
+            system_lang_code = 'en'
+
         self._init_request = functions.InitConnectionRequest(
             api_id=self.api_id,
             device_model=device_model or default_device_model or 'Unknown',
@@ -374,9 +414,10 @@ class TelegramBaseClient(abc.ABC):
             app_version=app_version or self.__version__,
             lang_code=lang_code,
             system_lang_code=system_lang_code,
-            lang_pack='',  # "langPacks are for official apps only"
+            lang_pack=lang_pack,
             query=None,
-            proxy=init_proxy
+            proxy=init_proxy if not hide_proxy else None,
+            params=params
         )
 
         # Remember flood-waited requests to avoid making them again
@@ -391,6 +432,10 @@ class TelegramBaseClient(abc.ABC):
         self._keepalive_handle = None
         self._last_request = time.time()
         self._no_updates = not receive_updates
+
+        if allowed_updates_chats is None:
+            allowed_updates_chats = []
+        self._allowed_chats = allowed_updates_chats
 
         # Used for non-sequential updates, in order to terminate all pending tasks on disconnect.
         self._sequential_updates = sequential_updates
@@ -564,6 +609,10 @@ class TelegramBaseClient(abc.ABC):
             req = functions.InvokeWithoutUpdatesRequest(req)
 
         await self._sender.send(functions.InvokeWithLayerRequest(LAYER, req))
+        # result = await self._sender.send(GetLanguagesRequest(self.lang_pack))
+        # print(result)
+        # result = await self._sender.send(GetLangPackRequest(self.lang_pack, self.lang_code))
+        # print(result)
 
         if self._message_box.is_empty():
             me = await self.get_me()

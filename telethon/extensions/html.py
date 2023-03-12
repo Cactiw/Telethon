@@ -12,7 +12,7 @@ from ..tl.types import (
     MessageEntityBold, MessageEntityItalic, MessageEntityCode,
     MessageEntityPre, MessageEntityEmail, MessageEntityUrl,
     MessageEntityTextUrl, MessageEntityMentionName,
-    MessageEntityUnderline, MessageEntityStrike, MessageEntityBlockquote,
+    MessageEntityUnderline, MessageEntityStrike, MessageEntityBlockquote, MessageEntitySpoiler,
     TypeMessageEntity
 )
 
@@ -55,6 +55,8 @@ class HTMLToTelegramParser(HTMLParser):
             EntityType = MessageEntityStrike
         elif tag == 'blockquote':
             EntityType = MessageEntityBlockquote
+        elif tag == 'tg-spoiler':
+            EntityType = MessageEntitySpoiler
         elif tag == 'code':
             try:
                 # If we're in the middle of a <pre> tag, this <code> tag is
