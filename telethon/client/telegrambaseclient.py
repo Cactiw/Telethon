@@ -609,6 +609,10 @@ class TelegramBaseClient(abc.ABC):
             req = functions.InvokeWithoutUpdatesRequest(req)
 
         await self._sender.send(functions.InvokeWithLayerRequest(LAYER, req))
+        # result = await self._sender.send(GetLanguagesRequest(self.lang_pack))
+        # print(result)
+        # result = await self._sender.send(GetLangPackRequest(self.lang_pack, self.lang_code))
+        # print(result)
 
         if self._message_box.is_empty():
             me = await self.get_me()
