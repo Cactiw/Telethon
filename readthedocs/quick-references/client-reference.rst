@@ -32,6 +32,7 @@ Auth
     send_code_request
     sign_in
     qr_login
+    sign_up
     log_out
     edit_2fa
 
