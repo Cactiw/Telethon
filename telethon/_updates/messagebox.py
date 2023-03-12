@@ -19,6 +19,7 @@ to get the difference.
 import asyncio
 import datetime
 import time
+import logging
 from enum import Enum
 from .session import SessionState, ChannelState
 from ..tl import types as tl, functions as fn
@@ -50,6 +51,10 @@ ENTRY_ACCOUNT = object()
 # Account-wide `qts` includes only "secret" one-to-one chats.
 ENTRY_SECRET = object()
 # Integers will be Channel-specific `pts`, and includes "megagroup", "broadcast" and "supergroup" channels.
+
+# Python's logging doesn't define a TRACE level. Pick halfway between DEBUG and NOTSET.
+# We don't define a name for this as libraries shouldn't do that though.
+LOG_LEVEL_TRACE = (logging.DEBUG - logging.NOTSET) // 2
 
 _sentinel = object()
 
@@ -155,10 +160,11 @@ class PossibleGap:
 #
 # See https://core.telegram.org/api/updates#message-related-event-sequences.
 class MessageBox:
-    __slots__ = ('map', 'date', 'seq', 'next_deadline', 'possible_gaps', 'getting_diff_for', 'reset_deadlines_for')
+    __slots__ = ('_log', 'map', 'date', 'seq', 'next_deadline', 'possible_gaps', 'getting_diff_for', 'reset_deadlines_for')
 
     def __init__(
         self,
+        log,
         # Map each entry to their current state.
         map: dict = _sentinel,  # entry -> state
 
@@ -185,6 +191,7 @@ class MessageBox:
         # Stored in the message box in order to reuse the allocation.
         reset_deadlines_for: set = _sentinel  # entry
     ):
+        self._log = log
         self.map = {} if map is _sentinel else map
         self.date = date
         self.seq = seq
@@ -193,12 +200,29 @@ class MessageBox:
         self.getting_diff_for = set() if getting_diff_for is _sentinel else getting_diff_for
         self.reset_deadlines_for = set() if reset_deadlines_for is _sentinel else reset_deadlines_for
 
+        if __debug__:
+            # Need this to tell them apart when printing the repr of the state map.
+            # Could be done once at the global level, but that makes configuring logging
+            # more annoying because it would need to be done before importing telethon.
+            self._trace('ENTRY_ACCOUNT = %r; ENTRY_SECRET = %r', ENTRY_ACCOUNT, ENTRY_SECRET)
+            self._trace('Created new MessageBox with map = %r, date = %r, seq = %r', self.map, self.date, self.seq)
+
+    def _trace(self, msg, *args, **kwargs):
+        # Calls to trace can't really be removed beforehand without some dark magic.
+        # So every call to trace is prefixed with `if __debug__`` instead, to remove
+        # it when using `python -O`. Probably unnecessary, but it's nice to avoid
+        # paying the cost for something that is not used.
+        self._log.log(LOG_LEVEL_TRACE, msg, *args, **kwargs)
+
     # region Creation, querying, and setting base state.
 
     def load(self, session_state, channel_states):
         """
         Create a [`MessageBox`] from a previously known update state.
         """
+        if __debug__:
+            self._trace('Loading MessageBox with session_state = %r, channel_states = %r', session_state, channel_states)
+
         deadline = next_updates_deadline()
 
         self.map.clear()
@@ -259,6 +283,9 @@ class MessageBox:
             self.getting_diff_for.update(entry for entry, gap in self.possible_gaps.items() if now > gap.deadline)
             self.getting_diff_for.update(entry for entry, state in self.map.items() if now > state.deadline)
 
+            if __debug__:
+                self._trace('Deadlines met, now getting diff for %r', self.getting_diff_for)
+
             # When extending `getting_diff_for`, it's important to have the moral equivalent of
             # `begin_get_diff` (that is, clear possible gaps if we're now getting difference).
             for entry in self.getting_diff_for:
@@ -304,6 +331,9 @@ class MessageBox:
     # Should be called right after login if [`MessageBox::new`] was used, otherwise undesirable
     # updates will be fetched.
     def set_state(self, state, reset=True):
+        if __debug__:
+            self._trace('Setting state %s', state)
+
         deadline = next_updates_deadline()
 
         if state.pts != NO_SEQ or not reset:
@@ -330,6 +360,9 @@ class MessageBox:
     #
     # The update state will only be updated if no entry was known previously.
     def try_set_channel_state(self, id, pts):
+        if __debug__:
+            self._trace('Trying to set channel state for %r: %r', id, pts)
+
         if id not in self.map:
             self.map[id] = State(pts=pts, deadline=next_updates_deadline())
 
@@ -383,6 +416,9 @@ class MessageBox:
         chat_hashes,
         result,  # out list of updates; returns list of user, chat, or raise if gap
     ):
+        if __debug__:
+            self._trace('Processing updates %s', updates)
+
         date = getattr(updates, 'date', None)
         if date is None:
             # updatesTooLong is the only one with no date (we treat it as a gap)
@@ -536,8 +572,14 @@ class MessageBox:
         if pts.entry in self.map:
             self.map[pts.entry].pts = pts.pts
         else:
+            # When a chat is migrated to a megagroup, the first update can be a `ReadChannelInbox`
+            # with `pts = 1, pts_count = 0` followed by a `NewChannelMessage` with `pts = 2, pts_count=1`.
+            # Note how the `pts` for the message is 2 and not 1 unlike the case described before!
+            # This is likely because the `pts` cannot be 0 (or it would fail with PERSISTENT_TIMESTAMP_EMPTY),
+            # which forces the first update to be 1. But if we got difference with 1 and the second update
+            # also used 1, we would miss it, so Telegram probably uses 2 to work around that.
             self.map[pts.entry] = State(
-                pts=pts.pts - (0 if pts.pts_count else 1),
+                pts=(pts.pts - (0 if pts.pts_count else 1)) or 1,
                 deadline=next_updates_deadline()
             )
 
@@ -554,12 +596,15 @@ class MessageBox:
                 if entry not in self.map:
                     raise RuntimeError('Should not try to get difference for an entry without known state')
 
-                return fn.updates.GetDifferenceRequest(
+                gd = fn.updates.GetDifferenceRequest(
                     pts=self.map[ENTRY_ACCOUNT].pts,
                     pts_total_limit=None,
                     date=self.date,
                     qts=self.map[ENTRY_SECRET].pts if ENTRY_SECRET in self.map else NO_SEQ,
                 )
+                if __debug__:
+                    self._trace('Requesting account difference %s', gd)
+                return gd
 
         return None
 
@@ -569,6 +614,9 @@ class MessageBox:
         diff,
         chat_hashes,
     ):
+        if __debug__:
+            self._trace('Applying account difference %s', diff)
+
         finish = None
         result = None
 
@@ -595,7 +643,7 @@ class MessageBox:
             secret = ENTRY_SECRET in self.getting_diff_for
 
             if not account and not secret:
-                raise RuntimeWarning('Should not be applying the difference when neither account or secret was diff was active')
+                raise RuntimeError('Should not be applying the difference when neither account or secret was diff was active')
 
             # Both may be active if both expired at the same time.
             if account:
@@ -637,11 +685,14 @@ class MessageBox:
         return updates, diff.users, diff.chats
 
     def end_difference(self):
+        if __debug__:
+            self._trace('Ending account difference')
+
         account = ENTRY_ACCOUNT in self.getting_diff_for
         secret = ENTRY_SECRET in self.getting_diff_for
 
         if not account and not secret:
-            raise RuntimeWarning('Should not be ending get difference when neither account or secret was diff was active')
+            raise RuntimeError('Should not be ending get difference when neither account or secret was diff was active')
 
         # Both may be active if both expired at the same time.
         if account:
@@ -676,13 +727,16 @@ class MessageBox:
         if not state:
             raise RuntimeError('Should not try to get difference for an entry without known state')
 
-        return fn.updates.GetChannelDifferenceRequest(
+        gd = fn.updates.GetChannelDifferenceRequest(
             force=False,
             channel=tl.InputChannel(packed.id, packed.hash),
             filter=tl.ChannelMessagesFilterEmpty(),
             pts=state.pts,
             limit=BOT_CHANNEL_DIFF_LIMIT if chat_hashes.self_bot else USER_CHANNEL_DIFF_LIMIT
         )
+        if __debug__:
+            self._trace('Requesting channel difference %s', gd)
+        return gd
 
     # Similar to [`MessageBox::process_updates`], but using the result from getting difference.
     def apply_channel_difference(
@@ -692,6 +746,9 @@ class MessageBox:
         chat_hashes,
     ):
         entry = request.channel.channel_id
+        if __debug__:
+            self._trace('Applying channel difference for %r: %s', entry, diff)
+
         self.possible_gaps.pop(entry, None)
 
         if isinstance(diff, tl.updates.ChannelDifferenceEmpty):
@@ -735,6 +792,8 @@ class MessageBox:
 
     def end_channel_difference(self, request, reason: PrematureEndReason, chat_hashes):
         entry = request.channel.channel_id
+        if __debug__:
+            self._trace('Ending channel difference for %r because %s', entry, reason)
 
         if reason == PrematureEndReason.TEMPORARY_SERVER_ISSUES:
             # Temporary issues. End getting difference without updating the pts so we can retry later.

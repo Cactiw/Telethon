@@ -223,7 +223,8 @@ class DownloadMethods:
                 The output file path, directory, or stream-like object.
                 If the path exists and is a file, it will be overwritten.
                 If file is the type `bytes`, it will be downloaded in-memory
-                as a bytestring (e.g. ``file=bytes``).
+                and returned as a bytestring (i.e. ``file=bytes``, without
+                parentheses or quotes).
 
             download_big (`bool`, optional):
                 Whether to use the big version of the available photos.
@@ -333,7 +334,8 @@ class DownloadMethods:
                 The output file path, directory, or stream-like object.
                 If the path exists and is a file, it will be overwritten.
                 If file is the type `bytes`, it will be downloaded in-memory
-                as a bytestring (e.g. ``file=bytes``).
+                and returned as a bytestring (i.e. ``file=bytes``, without
+                parentheses or quotes).
 
             progress_callback (`callable`, optional):
                 A callback function accepting two parameters:
@@ -375,6 +377,9 @@ class DownloadMethods:
                 # or
                 path = await message.download_media()
                 await message.download_media(filename)
+
+                # Downloading to memory
+                blob = await client.download_media(message, bytes)
 
                 # Printing download progress
                 def callback(current, total):
@@ -918,22 +923,19 @@ class DownloadMethods:
             'END:VCARD\n'
         ).format(f=first_name, l=last_name, p=phone_number).encode('utf-8')
 
+        file = cls._get_proper_filename(
+            file, 'contact', '.vcard',
+            possible_names=[first_name, phone_number, last_name]
+        )
         if file is bytes:
             return result
-        elif isinstance(file, str):
-            file = cls._get_proper_filename(
-                file, 'contact', '.vcard',
-                possible_names=[first_name, phone_number, last_name]
-            )
-            f = open(file, 'wb')
-        else:
-            f = file
+        f = file if hasattr(file, 'write') else open(file, 'wb')
 
         try:
             f.write(result)
         finally:
             # Only close the stream if we opened it
-            if isinstance(file, str):
+            if f != file:
                 f.close()
 
         return file
@@ -950,18 +952,17 @@ class DownloadMethods:
             )
 
         # TODO Better way to get opened handles of files and auto-close
-        in_memory = file is bytes
-        if in_memory:
+        kind, possible_names = self._get_kind_and_names(web.attributes)
+        file = self._get_proper_filename(
+            file, kind, utils.get_extension(web),
+            possible_names=possible_names
+        )
+        if file is bytes:
             f = io.BytesIO()
-        elif isinstance(file, str):
-            kind, possible_names = cls._get_kind_and_names(web.attributes)
-            file = cls._get_proper_filename(
-                file, kind, utils.get_extension(web),
-                possible_names=possible_names
-            )
-            f = open(file, 'wb')
-        else:
+        elif hasattr(file, 'write'):
             f = file
+        else:
+            f = open(file, 'wb')
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -974,10 +975,10 @@ class DownloadMethods:
                             break
                         f.write(chunk)
         finally:
-            if isinstance(file, str) or file is bytes:
+            if f != file:
                 f.close()
 
-        return f.getvalue() if in_memory else file
+        return f.getvalue() if file is bytes else file
 
     @staticmethod
     def _get_proper_filename(file, kind, extension,
