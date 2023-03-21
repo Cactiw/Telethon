@@ -254,6 +254,7 @@ class TelegramBaseClient(abc.ABC):
             installer: str = None,
             package_id: str = None,
             device_token: str = None,
+            tz_offset: int = None,
             hide_proxy: bool = False,
             allowed_updates_chats: list = None,
             raise_migrated_error: bool = False
@@ -399,7 +400,9 @@ class TelegramBaseClient(abc.ABC):
             object_value = JsonObjectValue(key="package_id", value=JsonString(package_id))
             values.append(object_value)
 
-            object_value = JsonObjectValue(key="tz_offset", value=JsonNumber(10800))  # 3 hours
+            if tz_offset is None:
+                tz_offset = 10800  # 3 hours
+            object_value = JsonObjectValue(key="tz_offset", value=JsonNumber(tz_offset))
             values.append(object_value)
 
             params = JsonObject(values)
