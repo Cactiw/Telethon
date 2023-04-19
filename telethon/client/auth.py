@@ -366,7 +366,12 @@ class AuthMethods:
                 'and a password only if an RPCError was raised before.'
             )
 
-        result = await self(request)
+        try:
+            result = await self(request)
+        except errors.PhoneCodeExpiredError:
+            self._phone_code_hash.pop(phone, None)
+            raise
+
         if isinstance(result, types.auth.AuthorizationSignUpRequired):
             # Emulate pre-layer 104 behaviour
             self._tos = result.terms_of_service
@@ -475,8 +480,7 @@ class AuthMethods:
 
         Returns the input user parameter.
         """
-        self._bot = bool(user.bot)
-        self._self_input_peer = utils.get_input_peer(user, allow_self=False)
+        self._mb_entity_cache.set_self_user(user.id, user.bot, user.access_hash)
         self._authorized = True
 
         state = await self(functions.updates.GetStateRequest())
@@ -626,8 +630,7 @@ class AuthMethods:
         except errors.RPCError:
             return False
 
-        self._bot = None
-        self._self_input_peer = None
+        self._mb_entity_cache.set_self_user(None, None, None)
         self._authorized = False
 
         await self.disconnect()
