@@ -467,9 +467,9 @@ class AuthMethods:
             await self(
                 functions.help.AcceptTermsOfServiceRequest(self._tos.id))
 
-        return await self._on_login(result.user)
+        return await self._on_login(result.user, do_init_state=True)
 
-    async def _on_login(self, user):
+    async def _on_login(self, user, do_init_state: bool = False):
         """
         Callback called whenever the login or sign up process completes.
 
@@ -479,10 +479,15 @@ class AuthMethods:
         self._self_input_peer = utils.get_input_peer(user, allow_self=False)
         self._authorized = True
 
-        state = await self(functions.updates.GetStateRequest())
-        self._message_box.load(SessionState(0, 0, 0, state.pts, state.qts, int(state.date.timestamp()), state.seq, 0), [])
+        if do_init_state:
+            await self._init_account_state()
 
         return user
+
+    async def _init_account_state(self):
+        state = await self(functions.updates.GetStateRequest())
+        self._message_box.load(SessionState(0, 0, 0, state.pts, state.qts, int(state.date.timestamp()), state.seq, 0),
+                               [])
 
     async def send_code_request(
             self: 'TelegramClient',

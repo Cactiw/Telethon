@@ -213,7 +213,7 @@ class UserMethods:
         if self._authorized is None:
             try:
                 # Any request that requires authorization will work
-                await self(functions.updates.GetStateRequest())
+                await self(functions.messages.GetRecentReactionsRequest(hash=0, limit=50))
                 self._authorized = True
             except errors.RPCError:
                 self._authorized = False
