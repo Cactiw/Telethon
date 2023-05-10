@@ -159,7 +159,8 @@ class UserMethods:
 
         try:
             me = (await self(
-                functions.users.GetUsersRequest([types.InputUserSelf()])))[0]
+                functions.users.GetFullUserRequest(types.InputUserSelf())))
+            me = me.users[0]
 
             self._bot = me.bot
             if not self._self_input_peer:
