@@ -8,7 +8,7 @@ from hashlib import sha1
 
 from ..tl.types import (
     ResPQ, PQInnerData, ServerDHParamsFail, ServerDHParamsOk,
-    ServerDHInnerData, ClientDHInnerData, DhGenOk, DhGenRetry, DhGenFail
+    ServerDHInnerData, ClientDHInnerData, DhGenOk, DhGenRetry, DhGenFail, FutureSalt
 )
 from .. import helpers
 from ..crypto import AES, AuthKey, Factorization, rsa
@@ -189,6 +189,10 @@ async def do_authentication(sender):
     auth_key = AuthKey(rsa.get_byte_array(gab))
     nonce_number = 1 + nonce_types.index(type(dh_gen))
     new_nonce_hash = auth_key.calc_new_nonce_hash(new_nonce, nonce_number)
+    salt = 0
+    for a in range(7, -1, -1):
+        salt <<= 8
+        salt |= (new_nonce.to_bytes(32, 'little', signed=True)[a] ^ res_pq.server_nonce.to_bytes(32, 'little', signed=True)[a])
 
     dh_hash = getattr(dh_gen, 'new_nonce_hash{}'.format(nonce_number))
     if dh_hash != new_nonce_hash:
@@ -197,7 +201,7 @@ async def do_authentication(sender):
     if not isinstance(dh_gen, DhGenOk):
         raise AssertionError('Step 3.2 answer was %s' % dh_gen)
 
-    return auth_key, time_offset
+    return auth_key, time_offset, salt
 
 
 def get_int(byte_array, signed=True):
