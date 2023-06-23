@@ -213,13 +213,13 @@ class MTProtoState:
 
             if time_delta > MSG_TOO_OLD_DELTA:
                 self._log.warning('Server sent a very old message with ID %d, ignoring', remote_msg_id)
-                self._count_ignored()
-                return None
+                # self._count_ignored()
+                # return None
 
             if -time_delta > MSG_TOO_NEW_DELTA:
                 self._log.warning('Server sent a very new message with ID %d, ignoring', remote_msg_id)
-                self._count_ignored()
-                return None
+                # self._count_ignored()
+                # return None
 
         self._recent_remote_ids.append(remote_msg_id)
         self._highest_remote_id = remote_msg_id
