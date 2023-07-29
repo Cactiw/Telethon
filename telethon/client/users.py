@@ -157,7 +157,8 @@ class UserMethods:
 
         try:
             me = (await self(
-                functions.users.GetUsersRequest([types.InputUserSelf()])))[0]
+                functions.users.GetFullUserRequest(types.InputUserSelf())))
+            me = me.users[0]
 
             if not self._mb_entity_cache.self_id:
                 self._mb_entity_cache.set_self_user(me.id, me.bot, me.access_hash)
@@ -208,7 +209,7 @@ class UserMethods:
         if self._authorized is None:
             try:
                 # Any request that requires authorization will work
-                await self(functions.updates.GetStateRequest())
+                await self(functions.messages.GetRecentReactionsRequest(hash=0, limit=50))
                 self._authorized = True
             except errors.RPCError:
                 self._authorized = False
