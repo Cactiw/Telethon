@@ -458,6 +458,10 @@ class MTProtoSender:
         yet, this means we're probably not connected.
         """
         # TODO this is ugly, update loop shouldn't worry about this, sender should
+
+        # DISABLED AS WE HANDLE THIS IN APPLICATION LEVEL
+        return
+
         if self._ping is None:
             self._ping = rnd_id
             self.send(PingRequest(rnd_id))

@@ -178,9 +178,8 @@ class MTProtoState:
         reader = BinaryReader(body)
         reader.read_long()  # remote_salt
         if reader.read_long() != self.id:
-            pass
-            self._log.warning('Server replied with a wrong session ID')
-            # raise SecurityError('Server replied with a wrong session ID')
+            self._log.warning('Server replied with a wrong session ID (see FAQ for details)')
+            # raise SecurityError('Server replied with a wrong session ID (see FAQ for details)')
 
         remote_msg_id = reader.read_long()
 
@@ -212,12 +211,12 @@ class MTProtoState:
             time_delta = now - remote_msg_time
 
             if time_delta > MSG_TOO_OLD_DELTA:
-                self._log.warning('Server sent a very old message with ID %d, ignoring', remote_msg_id)
+                self._log.warning('Server sent a very old message with ID %d, ignoring (see FAQ for details)', remote_msg_id)
                 # self._count_ignored()
                 # return None
 
             if -time_delta > MSG_TOO_NEW_DELTA:
-                self._log.warning('Server sent a very new message with ID %d, ignoring', remote_msg_id)
+                self._log.warning('Server sent a very new message with ID %d, ignoring (see FAQ for details)', remote_msg_id)
                 # self._count_ignored()
                 # return None
 
