@@ -232,7 +232,13 @@ class MessageBox:
             self.map[ENTRY_SECRET] = State(pts=session_state.qts, deadline=deadline)
         self.map.update((s.channel_id, State(pts=s.pts, deadline=deadline)) for s in channel_states)
 
-        self.date = datetime.datetime.fromtimestamp(session_state.date, tz=datetime.timezone.utc)
+        if not session_state.date:
+            self.date = None
+        else:
+            self.date = datetime.datetime.fromtimestamp(session_state.date, tz=datetime.timezone.utc)
+        if not self.date:
+            logging.info(f"Date is None: {session_state.date}")
+            self.date = datetime.datetime.utcnow()
         self.seq = session_state.seq
         self.next_deadline = ENTRY_ACCOUNT
 
@@ -596,6 +602,8 @@ class MessageBox:
                 if entry not in self.map:
                     raise RuntimeError('Should not try to get difference for an entry without known state')
 
+                if not self.date:
+                    logging.info(f"date diff: {self.date}; {self.map[ENTRY_ACCOUNT].pts}; {entry.__name__}")
                 gd = fn.updates.GetDifferenceRequest(
                     pts=self.map[ENTRY_ACCOUNT].pts,
                     pts_total_limit=None,
