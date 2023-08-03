@@ -264,6 +264,9 @@ class Connection(abc.ABC):
         Disconnects from the server, and clears
         pending outgoing and incoming messages.
         """
+        if not self._connected:
+            return
+
         self._connected = False
 
         await helpers._cancel(
@@ -341,9 +344,12 @@ class Connection(abc.ABC):
             while self._connected:
                 try:
                     data = await self._recv()
+                except asyncio.CancelledError:
+                    break
                 except (IOError, asyncio.IncompleteReadError) as e:
                     self._log.warning('Server closed the connection: %s', e)
                     await self._recv_queue.put((None, e))
+                    await self.disconnect()
                 except InvalidChecksumError as e:
                     self._log.warning('Server response had invalid checksum: %s', e)
                     await self._recv_queue.put((None, e))
@@ -353,10 +359,9 @@ class Connection(abc.ABC):
                 except Exception as e:
                     self._log.exception('Unexpected exception in the receive loop')
                     await self._recv_queue.put((None, e))
+                    await self.disconnect()
                 else:
                     await self._recv_queue.put((data, None))
-        except asyncio.CancelledError:
-            pass
         finally:
             await self.disconnect()
 
