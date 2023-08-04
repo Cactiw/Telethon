@@ -1,5 +1,6 @@
 import abc
 import asyncio
+import logging
 import socket
 import sys
 
@@ -346,7 +347,8 @@ class Connection(abc.ABC):
                     data = await self._recv()
                 except asyncio.CancelledError:
                     break
-                except (IOError, asyncio.IncompleteReadError) as e:
+                except (IOError, asyncio.IncompleteReadError, ValueError) as e:
+                    logging.info(f'recv_loop {e}')
                     self._log.warning('Server closed the connection: %s', e)
                     await self._recv_queue.put((None, e))
                     await self.disconnect()
