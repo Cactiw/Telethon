@@ -586,8 +586,8 @@ class TelegramBaseClient(abc.ABC):
 
         if self._loop is None:
             self._loop = helpers.get_running_loop()
-        elif self._loop != helpers.get_running_loop():
-            raise RuntimeError('The asyncio event loop must not change after connection (see the FAQ for details)')
+        # elif self._loop != helpers.get_running_loop():
+        #     raise RuntimeError('The asyncio event loop must not change after connection (see the FAQ for details)')
 
         if not await self._sender.connect(self._connection(
             self.session.server_address,

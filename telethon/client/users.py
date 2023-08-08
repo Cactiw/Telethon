@@ -30,8 +30,8 @@ class UserMethods:
         return await self._call(self._sender, request, ordered=ordered)
 
     async def _call(self: 'TelegramClient', sender, request, ordered=False, flood_sleep_threshold=None):
-        if self._loop is not None and self._loop != helpers.get_running_loop():
-            raise RuntimeError('The asyncio event loop must not change after connection (see the FAQ for details)')
+        # if self._loop is not None and self._loop != helpers.get_running_loop():
+        #     raise RuntimeError('The asyncio event loop must not change after connection (see the FAQ for details)')
         # if the loop is None it will fail with a connection error later on
 
         if flood_sleep_threshold is None:
