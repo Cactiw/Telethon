@@ -311,9 +311,19 @@ class UpdateMethods:
                         errors.PersistentTimestampInvalidError,
                     ) as e:
                         from telethon._updates.messagebox import ENTRY_ACCOUNT
-                        self._log[__name__].error(f'Cannot get difference since timestamp error: {type(e).__name__}; {get_diff.pts}; {get_diff.qts}; {get_diff.date}')
-                        self._log[__name__].error(traceback.format_exc())
-                        raise
+                        self._log[__name__].info(f'Cannot get difference since timestamp error: {type(e).__name__}; {get_diff.pts}; {get_diff.qts}; {get_diff.date}')
+                        get_diff.pts = get_diff.pts - 100
+                        try:
+                            diff = await self(get_diff)
+                        except (
+                            errors.PersistentTimestampOutdatedError,
+                            errors.PersistentTimestampInvalidError,
+                        ):
+                            logging.info(f'Still {e}; init account state...')
+                            await self._init_account_state()
+                            await asyncio.sleep(0.3)
+                            continue
+
                     except (
                         errors.ServerError,
                         errors.TimeoutError,
