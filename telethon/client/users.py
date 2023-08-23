@@ -213,7 +213,7 @@ class UserMethods:
         if self._authorized is None:
             try:
                 # Any request that requires authorization will work
-                await self(functions.messages.GetRecentReactionsRequest(hash=0, limit=50))
+                await asyncio.wait_for(self(functions.messages.GetRecentReactionsRequest(hash=0, limit=50)), 30)
                 self._authorized = True
             except errors.RPCError:
                 self._authorized = False
