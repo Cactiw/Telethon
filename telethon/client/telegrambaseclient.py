@@ -418,6 +418,9 @@ class TelegramBaseClient(abc.ABC):
             object_value = JsonObjectValue(key="tz_offset", value=JsonNumber(tz_offset))
             values.append(object_value)
 
+            object_value = JsonObjectValue(key="perf_cat", value=JsonNumber(3))
+            values.append(object_value)
+
             params = JsonObject(values)
 
         if not system_lang_code:
