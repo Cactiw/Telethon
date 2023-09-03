@@ -401,8 +401,9 @@ class TelegramBaseClient(abc.ABC):
         if data is not None:
             values = []
 
-            object_value = JsonObjectValue(key="device_token", value=JsonString(device_token))
-            values.append(object_value)
+            if device_token:
+                object_value = JsonObjectValue(key="device_token", value=JsonString(device_token))
+                values.append(object_value)
 
             object_value = JsonObjectValue(key="data", value=JsonString(data))
             values.append(object_value)
