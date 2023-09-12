@@ -398,28 +398,33 @@ class TelegramBaseClient(abc.ABC):
         default_system_version = re.sub(r'-.+','',system.release)
 
         params = None
-        if data is not None:
+        if data is not None or tz_offset is not None:
             values = []
 
-            object_value = JsonObjectValue(key="device_token", value=JsonString(device_token))
-            values.append(object_value)
+            if device_token:
+                object_value = JsonObjectValue(key="device_token", value=JsonString(device_token))
+                values.append(object_value)
 
-            object_value = JsonObjectValue(key="data", value=JsonString(data))
-            values.append(object_value)
+            if data:
+                object_value = JsonObjectValue(key="data", value=JsonString(data))
+                values.append(object_value)
 
-            object_value = JsonObjectValue(key="installer", value=JsonString(installer))
-            values.append(object_value)
+            if installer:
+                object_value = JsonObjectValue(key="installer", value=JsonString(installer))
+                values.append(object_value)
 
-            object_value = JsonObjectValue(key="package_id", value=JsonString(package_id))
-            values.append(object_value)
+            if package_id:
+                object_value = JsonObjectValue(key="package_id", value=JsonString(package_id))
+                values.append(object_value)
 
             if tz_offset is None:
                 tz_offset = 10800  # 3 hours
             object_value = JsonObjectValue(key="tz_offset", value=JsonNumber(tz_offset))
             values.append(object_value)
 
-            object_value = JsonObjectValue(key="perf_cat", value=JsonNumber(3))
-            values.append(object_value)
+            if api_id in {4, 6, 21724}:
+                object_value = JsonObjectValue(key="perf_cat", value=JsonNumber(3))
+                values.append(object_value)
 
             params = JsonObject(values)
 
