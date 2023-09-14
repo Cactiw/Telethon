@@ -175,7 +175,7 @@ class MessageBox:
         map: dict = _sentinel,  # entry -> state
 
         # Additional fields beyond PTS needed by `ENTRY_ACCOUNT`.
-        date: datetime.datetime = epoch(),
+        date: datetime.datetime = epoch() + datetime.timedelta(seconds=1),
         seq: int = NO_SEQ,
 
         # Holds the entry with the closest deadline (optimization to avoid recalculating the minimum deadline).
@@ -484,7 +484,8 @@ class MessageBox:
         if any_pts_applied[0]:
             if __debug__:
                 self._trace('Updating seq as local pts was updated too')
-            self.date = date
+            if date != epoch():
+                self.date = date
             if seq != NO_SEQ:
                 self.seq = seq
 
