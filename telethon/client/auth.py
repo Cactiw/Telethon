@@ -430,9 +430,9 @@ class AuthMethods:
                 code = input('enter code: ')
                 await client.sign_up(code, first_name='Anna', last_name='Banana')
         """
-        me = await self.get_me()
-        if me:
-            return me
+        # me = await self.get_me()
+        # if me:
+        #     return me
 
         # To prevent abuse, one has to try to sign in before signing up. This
         # is the current way in which Telegram validates the code to sign up.
@@ -469,9 +469,9 @@ class AuthMethods:
             last_name=last_name
         ))
 
-        if self._tos:
-            await self(
-                functions.help.AcceptTermsOfServiceRequest(self._tos.id))
+        # if self._tos:
+            # await self(
+            #     functions.help.AcceptTermsOfServiceRequest(self._tos.id))
 
         return await self._on_login(result.user, do_init_state=True)
 
