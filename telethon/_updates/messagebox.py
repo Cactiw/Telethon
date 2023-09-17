@@ -628,7 +628,7 @@ class MessageBox:
                     logging.info(f"date diff: {self.date}; {self.map[ENTRY_ACCOUNT].pts}; {entry.__name__}")
                 gd = fn.updates.GetDifferenceRequest(
                     pts=self.map[ENTRY_ACCOUNT].pts,
-                    pts_total_limit=None,
+                    pts_total_limit=5_000,
                     date=self.date,
                     qts=self.map[ENTRY_SECRET].pts if ENTRY_SECRET in self.map else NO_SEQ,
                 )
