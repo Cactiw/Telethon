@@ -469,9 +469,9 @@ class AuthMethods:
             last_name=last_name
         ))
 
-        # if self._tos:
-            # await self(
-            #     functions.help.AcceptTermsOfServiceRequest(self._tos.id))
+        if self._tos:
+            await self(
+                functions.help.AcceptTermsOfServiceRequest(self._tos.id))
 
         return await self._on_login(result.user, do_init_state=True)
 
