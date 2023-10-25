@@ -401,21 +401,22 @@ class TelegramBaseClient(abc.ABC):
         if data is not None or tz_offset is not None:
             values = []
 
-            if device_token:
-                object_value = JsonObjectValue(key="device_token", value=JsonString(device_token))
-                values.append(object_value)
+            if api_id != 2040:
+                if device_token:
+                    object_value = JsonObjectValue(key="device_token", value=JsonString(device_token))
+                    values.append(object_value)
 
-            if data:
-                object_value = JsonObjectValue(key="data", value=JsonString(data))
-                values.append(object_value)
+                if data:
+                    object_value = JsonObjectValue(key="data", value=JsonString(data))
+                    values.append(object_value)
 
-            if installer:
-                object_value = JsonObjectValue(key="installer", value=JsonString(installer))
-                values.append(object_value)
+                if installer:
+                    object_value = JsonObjectValue(key="installer", value=JsonString(installer))
+                    values.append(object_value)
 
-            if package_id:
-                object_value = JsonObjectValue(key="package_id", value=JsonString(package_id))
-                values.append(object_value)
+                if package_id:
+                    object_value = JsonObjectValue(key="package_id", value=JsonString(package_id))
+                    values.append(object_value)
 
             if tz_offset is None:
                 tz_offset = 10800  # 3 hours
