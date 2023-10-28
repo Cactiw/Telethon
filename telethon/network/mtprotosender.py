@@ -313,8 +313,9 @@ class MTProtoSender:
         plain = MTProtoPlainSender(self._connection, loggers=self._loggers)
         try:
             self._log.debug('New auth_key attempt %d...', attempt)
-            self.auth_key.key, self._state.time_offset = \
+            self.auth_key.key, self._state.time_offset, self._state.salt = \
                 await authenticator.do_authentication(plain)
+            self._log.debug('New salt: %d...', self._state.salt)
 
             # This is *EXTREMELY* important since we don't control
             # external references to the authorization key, we must
