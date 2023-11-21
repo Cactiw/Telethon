@@ -13,6 +13,66 @@ it can take advantage of new goodies!
 
 .. contents:: List of All Versions
 
+New layer (v1.32)
+=================
+
++------------------------+
+| Scheme layer used: 166 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=165&to=166>`__.
+
+This enables you to use custom languages in preformatted blocks using HTML:
+
+.. code-block:: html
+
+  <pre>
+    <code class='language-python'>from telethon import TelegramClient</code>
+  </pre>
+
+Note that Telethon v1's markdown is a custom format and won't support language tags.
+If you want to set a custom language, you have to use HTML or a custom formatter.
+
+
+Dropped imghdr support (v1.31)
+==============================
+
++------------------------+
+| Scheme layer used: 165 |
++------------------------+
+
+This release contains a breaking change in preparation for Python 3.12.
+If you were sending photos from in-memory ``bytes`` or ``BytesIO`` containing images,
+you should now use ``BytesIO`` and set the ``.name`` property to a dummy name.
+This will allow Telethon to detect the correct extension (and file type).
+
+.. code-block:: python
+
+    # before
+    image_data = b'...'
+    client.send_file(chat, image_data)
+
+    # after
+    from io import BytesIO
+    image_data = BytesIO(b'...')
+    image_data.name = 'a.jpg'  # any name, only the extension matters
+    client.send_file(chat, image_data)
+
+
+Bug fixes
+~~~~~~~~~
+
+* Code generation wasn't working under PyPy.
+* Obtaining markdown or HTML from message text could produce unexpected results sometimes.
+* Other fixes for bugs from the previous version, which were already fixed in patch versions.
+
+Breaking Changes
+~~~~~~~~~~~~~~~~
+
+* ``imghdr`` is deprecated in newer Python versions, so Telethon no longer uses it.
+  This means there might be some cases where Telethon fails to infer the file extension for buffers containing images.
+  If you were relying on this, add ``.name = 'a.jpg'`` (or other extension) to the ``BytesIO`` buffers you upload.
+
 Layer bump and small changes (v1.30)
 ====================================
 
