@@ -13,6 +13,49 @@ it can take advantage of new goodies!
 
 .. contents:: List of All Versions
 
+New layer (v1.34)
+=================
+
++------------------------+
+| Scheme layer used: 173 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=167&to=173>`__.
+
+Additions
+~~~~~~~~~~~~
+
+* ``reply_to_chat`` and ``reply_to_sender`` are now in ``Message``.
+  This is useful when you lack access to the chat, but Telegram still included some basic information.
+
+Bug fixes
+~~~~~~~~~
+
+* ``parse_mode`` with a custom instance containing both ``parse`` and ``unparse`` should now work.
+* Parsing and unparsing message entities should now behave better in certain corner-cases.
+
+
+New layer (v1.33)
+=================
+
++------------------------+
+| Scheme layer used: 167 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=166&to=167>`__.
+
+Enhancements
+~~~~~~~~~~~~
+
+* ``webbrowser`` is now imported conditionally, to support niche environments.
+* Library should now retry on the suddenly-common ``TimedOutError``.
+
+Bug fixes
+~~~~~~~~~
+
+* Sending photos which were automatically resized should work again (included in the v1.32 series).
+
+
 New layer (v1.32)
 =================
 
