@@ -163,6 +163,8 @@ class Message(ChatGetter, SenderGetter, TLObject):
         action (:tl:`MessageAction`):
             The message action object of the message for :tl:`MessageService`
             instances, which will be `None` for other types of messages.
+
+        saved_peer_id (:tl:`Peer`)
     """
 
     # region Initialization
@@ -205,9 +207,10 @@ class Message(ChatGetter, SenderGetter, TLObject):
             noforwards: Optional[bool] = None,
             invert_media: Optional[bool] = None,
             reactions: Optional[types.TypeMessageReactions] = None,
-            restriction_reason: Optional[types.TypeRestrictionReason] = None,
+            restriction_reason: Optional[List[types.TypeRestrictionReason]] = None,
             forwards: Optional[int] = None,
             replies: Optional[types.TypeMessageReplies] = None,
+            saved_peer_id: Optional[types.TypePeer] = None,
 
             # For MessageAction (mandatory)
             action: Optional[types.TypeMessageAction] = None
@@ -244,6 +247,7 @@ class Message(ChatGetter, SenderGetter, TLObject):
         self.reactions = reactions
         self.restriction_reason = restriction_reason
         self.ttl_period = ttl_period
+        self.saved_peer_id = saved_peer_id
         self.action = action
 
         # Convenient storage for custom functions
@@ -276,6 +280,8 @@ class Message(ChatGetter, SenderGetter, TLObject):
         SenderGetter.__init__(self, sender_id)
 
         self._forward = None
+        self._reply_to_chat = None
+        self._reply_to_sender = None
 
     def _finish_init(self, client, entities, input_chat):
         """
@@ -328,6 +334,14 @@ class Message(ChatGetter, SenderGetter, TLObject):
         if self.replies and self.replies.channel_id:
             self._linked_chat = entities.get(utils.get_peer_id(
                     types.PeerChannel(self.replies.channel_id)))
+        
+        if isinstance(self.reply_to, types.MessageReplyHeader):
+            if self.reply_to.reply_to_peer_id:
+                self._reply_to_chat = entities.get(utils.get_peer_id(self.reply_to.reply_to_peer_id))
+            if self.reply_to.reply_from:
+                if self.reply_to.reply_from.from_id:
+                    self._reply_to_sender = entities.get(utils.get_peer_id(self.reply_to.reply_from.from_id))
+
 
 
     # endregion Initialization
@@ -403,6 +417,22 @@ class Message(ChatGetter, SenderGetter, TLObject):
         information if this message is a forwarded message.
         """
         return self._forward
+
+    @property
+    def reply_to_chat(self):
+        """
+        The :tl:`Channel` in which the replied-to message was sent,
+        if this message is a reply in another chat
+        """
+        return self._reply_to_chat
+
+    @property
+    def reply_to_sender(self):
+        """
+        The :tl:`User`, :tl:`Channel`, or whatever other entity that
+        sent the replied-to message, if this message is a reply in another chat.
+        """
+        return self._reply_to_sender
 
     @property
     def buttons(self):
