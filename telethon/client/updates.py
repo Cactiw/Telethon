@@ -357,12 +357,13 @@ class UpdateMethods:
                         self._log[__name__].info('Cannot get difference since the network is down: %s: %s', type(e).__name__, e)
                         await asyncio.sleep(5)
                         continue
-                    updates, users, chats = self._message_box.apply_difference(diff, self._mb_entity_cache)
-                    if updates:
-                        self._log[__name__].info('Got difference for account updates')
+                    if diff is not None:
+                        updates, users, chats = self._message_box.apply_difference(diff, self._mb_entity_cache)
+                        if updates:
+                            self._log[__name__].info('Got difference for account updates')
 
-                    updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
-                    continue
+                        updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
+                        continue
 
                 get_diff = self._message_box.get_channel_difference(self._mb_entity_cache)
                 if get_diff:
