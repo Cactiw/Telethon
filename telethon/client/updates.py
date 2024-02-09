@@ -358,12 +358,14 @@ class UpdateMethods:
                         await asyncio.sleep(5)
                         continue
                     if diff is not None:
-                        updates, users, chats = self._message_box.apply_difference(diff, self._mb_entity_cache)
-                        if updates:
-                            self._log[__name__].info('Got difference for account updates')
+                        apply_res = self._message_box.apply_difference(diff, self._mb_entity_cache)
+                        if apply_res:
+                            updates, users, chats = apply_res
+                            if updates:
+                                self._log[__name__].info('Got difference for account updates')
 
-                        updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
-                        continue
+                            updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
+                            continue
 
                 get_diff = self._message_box.get_channel_difference(self._mb_entity_cache)
                 if get_diff:
