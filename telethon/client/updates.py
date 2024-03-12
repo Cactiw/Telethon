@@ -367,12 +367,7 @@ class UpdateMethods:
                             updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
                             continue
 
-                try:
-                    get_diff = self._message_box.get_channel_difference(self._mb_entity_cache)
-                except Exception:
-                    self._log[__name__].exception(
-                        f'Error handling updates (this is a bug in Telethon v{__version__}, please report it)')
-                    get_diff = None
+                get_diff = self._message_box.get_channel_difference(self._mb_entity_cache)
                 if get_diff:
                     self._log[__name__].debug('Getting difference for channel %s updates', get_diff.channel.channel_id)
                     try:
