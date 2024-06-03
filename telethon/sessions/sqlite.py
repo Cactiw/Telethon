@@ -264,6 +264,7 @@ class SQLiteSession(MemorySession):
 
     def delete(self):
         """Deletes the current session file"""
+        return False  # In our project we never want to delete a session.
         if self.filename == ':memory:':
             return True
         try:
