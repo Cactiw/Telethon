@@ -427,7 +427,7 @@ class TelegramBaseClient(abc.ABC):
             values.append(object_value)
 
             if api_id in {4, 6, 21724}:
-                object_value = JsonObjectValue(key="perf_cat", value=JsonNumber(3))
+                object_value = JsonObjectValue(key="perf_cat", value=JsonNumber(2))
                 values.append(object_value)
 
             params = JsonObject(values)
