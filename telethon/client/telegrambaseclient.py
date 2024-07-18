@@ -272,7 +272,11 @@ class TelegramBaseClient(abc.ABC):
             tz_offset: int = None,
             hide_proxy: bool = False,
             allowed_updates_chats: list = None,
-            raise_migrated_error: bool = False
+            raise_migrated_error: bool = False,
+            dc_id: int = None,
+            dc_ip: str = None,
+            dc_port: int = None,
+            disable_me_check: bool = False,
     ):
         if not api_id or not api_hash:
             raise ValueError(
@@ -323,9 +327,9 @@ class TelegramBaseClient(abc.ABC):
         if (not session.server_address or
                 (':' in session.server_address) != use_ipv6):
             session.set_dc(
-                DEFAULT_DC_ID,
-                DEFAULT_IPV6_IP if self._use_ipv6 else DEFAULT_IPV4_IP,
-                DEFAULT_PORT
+                dc_id or DEFAULT_DC_ID,
+                DEFAULT_IPV6_IP if self._use_ipv6 else dc_ip or DEFAULT_IPV4_IP,
+                dc_port or DEFAULT_PORT
             )
 
         self.flood_sleep_threshold = flood_sleep_threshold
@@ -382,6 +386,10 @@ class TelegramBaseClient(abc.ABC):
         self._local_addr = local_addr
         self._timeout = timeout
         self._auto_reconnect = auto_reconnect
+        self._dc_id = dc_id
+        self._dc_ip = dc_ip
+        self._dc_port = dc_port
+        self.disable_me_check = disable_me_check
 
         assert isinstance(connection, type)
         self._connection = connection
@@ -657,7 +665,10 @@ class TelegramBaseClient(abc.ABC):
         # print(result)
 
         if self._message_box.is_empty():
-            me = await self.get_me()
+            if self.disable_me_check:
+                me = None
+            else:
+                me = await self.get_me()
             if me:
                 await self._on_login(me)  # also calls GetState to initialize the MessageBox
 
