@@ -26,6 +26,9 @@ def generate_errors(errors, f):
 
     # Error classes generation
     for error in errors:
+        if error.name == "FloodPremiumWaitError":
+            error.subclass = "FloodWaitError"
+
         f.write('\n\nclass {}({}):\n    '.format(error.name, error.subclass))
 
         if error.has_captures:
